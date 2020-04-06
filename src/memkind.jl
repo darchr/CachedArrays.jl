@@ -20,7 +20,7 @@ end
 # Wrapper for MemKind Memory Kinds
 #
 # The default ones are simply global pointers to the preallocated structs.
-struct Kind
+mutable struct Kind
     ptr::Ptr{Nothing}
 end
 Base.pointer(x::Kind) = x.ptr
@@ -49,8 +49,8 @@ function free(kind::Kind, ptr::Ptr{Nothing})
 end
 
 # defrag
-function defrag(kind::Kind, ptr::Kind)
-    return ccall((:memkind_defrag_realloc, libmemkind), Ptr{Cvoid}, (Kind, Ptr{Cvoid}), kind, ptr)
+function defrag(kind::Kind, ptr::Ptr{Cvoid})
+    return ccall((:memkind_defrag_realloc, libmemkind), Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}), poiner(kind), ptr)
 end
 
 # Create pmem
@@ -68,7 +68,17 @@ function create_pmem(dir::AbstractString, max_size)
     if val != 0
         throw(error(val))
     end
-    return Kind(kind[])
+    obj = Kind(kind[])
+    finalizer(destroy, obj)
+    return obj
+end
+
+function destroy(kind::Kind)
+    val = ccall((:memkind_destroy_kind, libmemkind), Cint, (Ptr{Cvoid},), pointer(kind))
+    if val != 0
+        throw(error(val))
+    end
+    return nothing
 end
 
 end # module
