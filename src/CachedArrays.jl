@@ -1,5 +1,8 @@
 module CachedArrays
 
-greet() = print("Hello World!")
+export CachedArray
+
+include("memkind.jl")
+include("array.jl")
 
 end # module
