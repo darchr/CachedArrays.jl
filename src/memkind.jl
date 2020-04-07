@@ -50,11 +50,26 @@ end
 
 # defrag
 function defrag(kind::Kind, ptr::Ptr{Cvoid})
-    return ccall((:memkind_defrag_realloc, libmemkind), Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}), poiner(kind), ptr)
+    return ccall(
+        (:memkind_defrag_realloc, libmemkind),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        poiner(kind), ptr
+    )
+end
+
+#####
+##### Utils
+#####
+
+function detect_kind(ptr::Ptr)
+    ptrn = convert(Ptr{Nothing}, ptr)
+    kind = ccall((:memkind_detect_kind, libmemkind), Ptr{Cvoid}, (Ptr{Cvoid},), ptrn)
+    return Kind(kind)
 end
 
 # Create pmem
-function create_pmem(dir::AbstractString, max_size)
+function create_pmem(dir::AbstractString, max_size = 0)
     kind = Ref(Ptr{Cvoid}(0))
     val = ccall(
         (:memkind_create_pmem, libmemkind),

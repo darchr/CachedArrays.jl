@@ -8,12 +8,12 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractArray{T,N}
     # This could be null if the remote hasn't been allocated.
     #
     # This array `A` is in remote storate if `pointer(A) == A.remote_ptr`
-    parent::Ref{Union{Nothing,Array{T,N}}}
+    parent::Union{Nothing,Array{T,N}}
 
     # Hints regarding storage
     manager::CacheManager
 
-    # Lock to ensure only one lock can manage the store at a time.
+    # Lock to ensure only one thread can manage the store at a time.
     movelock::ReentrantLock
 
     # Should be conservative with this flag and always default to `true`.
@@ -23,7 +23,7 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractArray{T,N}
     function CachedArray{T,N}(
             array::Array{T,N},
             parent,
-            manager::C = GlobalManager[]
+            manager::C = GlobalManager[],
         ) where {T,N,C}
 
         # Default settings.
@@ -35,26 +35,29 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractArray{T,N}
             parent,
             manager,
             movelock,
-            dirty
+            dirty,
         )
 
         # Attach finalizer.
         finalizer(cleanup, A)
+        registerlocal!(manager, A)
         return A
     end
 end
 
 # Finalizer
 function cleanup(A::CachedArray)
-    # Call `free` on remote arrays.
+    # Clean up local storage on the manager
+    if islocal(A)
+        freelocal!(A.manager, A)
+    end
+
+    # Call `free` on the remote array and clean up remote statistics on the manager.
     if hasparent(A)
+        freeremote!(A.manager, A)
         MemKind.free(A.manager.kind, pointer(parent(A)))
     end
 end
-
-# Global manager for the set of CachedArrays
-const GlobalManagerLock = ReentrantLock()
-const GlobalManager = Ref{CacheManager{CachedArray}}()
 
 function CachedArray{T}(::UndefInitializer, i::Integer) where {T}
     return CachedArray{T}(undef, (convert(Int, i),))
@@ -67,7 +70,7 @@ function CachedArray{T}(::UndefInitializer, dims::NTuple{N,Int}) where {T,N}
     # Default the `remote_ptr` to a null ptr
     A = CachedArray{T,N}(
         array,
-        Ref(nothing),
+        nothing,
     )
     return A
 end
@@ -79,7 +82,7 @@ parent(A::CachedArray) = A.parent
 isparent(A::CachedArray) = (_array(A) === parent(A))
 hasparent(A::CachedArray) = !isnothing(parent(A))
 
-islocal(A::CachedArray) = isnothing(parent(A)) || (parent(A) !== _array(A))
+islocal(A::CachedArray) = isnothing(parent(A)) || !isparent(A)
 
 isdirty(A::CachedArray) = A.dirty
 isclean(A::CachedArray) = !isdirty(A)
@@ -90,6 +93,7 @@ isclean(A::CachedArray) = !isdirty(A)
 
 Base.pointer(A::CachedArray) = pointer(A.array)
 @inline Base.size(A::CachedArray) = size(A.array)
+Base.sizeof(A::CachedArray) = sizeof(A.array)
 
 Base.@propagate_inbounds @inline Base.getindex(A::CachedArray, i::Int) = A.array[i]
 Base.@propagate_inbounds @inline Base.setindex!(A::CachedArray, v, i::Int) = setindex!(A.array, v, i)
@@ -145,6 +149,7 @@ function prefetch!(A::CachedArray, force = false)
 
         # TODO: Fast copy
         copyto!(localstorage, _array(A))
+        registerlocal!(A.manager, A)
 
         # Update the CachedArray
         A.parent = _array(A)
@@ -170,16 +175,21 @@ function evict!(A::CachedArray, force = false)
         if A.dirty && hp
             copyto!(parent(A), _array(A))
             A.array = parent(A)
+            freelocal!(A.manager, A)
             return nothing
         end
 
         # Regardless of whether this is clean or not, an eviction without a parent means
         # we have to create the parent.
         if !hp
-            P = remote_alloc(typeof(_array(A)), A.manager, size(A))
+            P = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
             A.array = P
             A.parent = P
             A.dirty = false
+
+            # Maintain status in the cache manager.
+            registerremote!(A.manager, A)
+            freelocal!(A.manager, A)
         end
         return nothing
     end
@@ -189,26 +199,31 @@ end
 ##### Allocate remote arrays
 #####
 
-# Allocate an object in remote memory.
 function remote_alloc(::Type{Array{T,N}}, manager::CacheManager, dims::NTuple{N,Int}) where {T,N}
+    A = unsafe_remote_alloc(Array{T,N}, manager, dims)
+    finalizer(A) do x
+        MemKind.free(manager.kind, pointer(A))
+    end
+    return A
+end
+
+# Allocate an object in remote memory.
+function unsafe_remote_alloc(
+        ::Type{Array{T,N}},
+        manager::CacheManager,
+        dims::NTuple{N,Int}
+    ) where {T,N}
+
     # Get the allocation size
     sz = sizeof(T) * prod(dims)
 
     # Perform the allocation, getting a raw pointer back
     ptr = convert(Ptr{T}, MemKind.malloc(manager.kind, sz))
 
-    # Wrap the pointer in an array and set the finalizer.
+    # Wrap the pointer in an array.
+    # We don't set the finalizer in this function because there are times when we want to
+    # manage the destruction of the array at a higher level.
     A = unsafe_wrap(Array, ptr, dims; own = false)
-
-    # NOTE: We don't attach a finalizer to the returned Array.
-    #
-    # It is the responsibility of the Caller to fall `free` at the correct time.
-    # This is to facilitate defragmentation, which invalidates pointers when called.
-    # If we attached a finalizer to the Array itself, we'd get a double-free.
-
-    # finalizer(A) do x
-    #     MemKind.free(manager.kind, pointer(A))
-    # end
 
     return A
 end
