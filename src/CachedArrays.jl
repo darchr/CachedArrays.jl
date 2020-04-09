@@ -2,9 +2,12 @@ module CachedArrays
 
 export CachedArray
 
+using MacroTools
+
 include("memkind.jl")
 include("cache.jl")
 include("array.jl")
+include("lib.jl")
 
 # Global manager for the set of CachedArrays
 const GlobalManager = Ref{CacheManager{CachedArray}}()

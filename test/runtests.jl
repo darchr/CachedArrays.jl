@@ -1,5 +1,6 @@
 using CachedArrays
 using Test
+using BenchmarkTools
 
 include("memkind.jl")
 include("cache.jl")

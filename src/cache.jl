@@ -1,11 +1,16 @@
 # Maintains Cache management.
 # TODO: Maybe make one of these per thread to cut down on the number of locks that have
 # to be grabbed?
+#
+# TODO: Start to think about eviction policy.
 mutable struct CacheManager{T}
     # Kind pointer from MemKind
     # This keeps track of the remote memory.
     kind::MemKind.Kind
-    lock::ReentrantLock
+
+    # TODO: Reintroduce if contention becomse an issue
+    # Otherwise, for now, keep main function calls single-threaded.
+    #lock::ReentrantLock
 
     # Reference to local objects
     #
@@ -34,7 +39,6 @@ function CacheManager{T}(path::AbstractString, sz = 0) where {T}
     # Construct the manager.
     manager = CacheManager{T}(
         kind,
-        ReentrantLock(),
         local_objects,
         0,
         remote_objects,
@@ -52,52 +56,48 @@ inremote(manager, x) = haskey(manager.remote_objects, objectid(x))
 #####
 
 function registerlocal!(manager::CacheManager{T}, A::U) where {T, U <: T}
-    Base.@lock manager.lock begin
-        # Add this array to the list of local objects.
-        before = length(manager.local_objects)
-        manager.local_objects[objectid(A)] = WeakRef(A)
-        if length(manager.local_objects) > before
-            manager.size_of_local += sizeof(A)
-        end
+    # Add this array to the list of local objects.
+    before = length(manager.local_objects)
+    manager.local_objects[objectid(A)] = WeakRef(A)
+    if length(manager.local_objects) > before
+        manager.size_of_local += sizeof(A)
     end
+
     return nothing
 end
 
 function freelocal!(manager::CacheManager{T}, A::U) where {T, U <: T}
-    Base.@lock manager.lock begin
-        # Keep track of the pre and post length so we only
-        # have to make one lookup in the hash table
-        before = length(manager.local_objects)
-        delete!(manager.local_objects, objectid(A))
-        if length(manager.local_objects) < before
-            manager.size_of_local -= sizeof(A)
-        end
+    # Keep track of the pre and post length so we only
+    # have to make one lookup in the hash table
+    before = length(manager.local_objects)
+    delete!(manager.local_objects, objectid(A))
+    if length(manager.local_objects) < before
+        manager.size_of_local -= sizeof(A)
     end
+
     return nothing
 end
 
 function registerremote!(manager::CacheManager{T}, A::U) where {T, U <: T}
-    Base.@lock manager.lock begin
-        # Add this array to the list of local objects.
-        before = length(manager.remote_objects)
-        manager.remote_objects[objectid(A)] = WeakRef(A)
-        if length(manager.remote_objects) > before
-            manager.size_of_remote += sizeof(A)
-        end
+    # Add this array to the list of local objects.
+    before = length(manager.remote_objects)
+    manager.remote_objects[objectid(A)] = WeakRef(A)
+    if length(manager.remote_objects) > before
+        manager.size_of_remote += sizeof(A)
     end
+
     return nothing
 end
 
 function freeremote!(manager::CacheManager{T}, A::U) where {T, U <: T}
-    Base.@lock manager.lock begin
-        # Keep track of the pre and post length so we only
-        # have to make one lookup in the hash table
-        before = length(manager.remote_objects)
-        delete!(manager.remote_objects, objectid(A))
-        if length(manager.remote_objects) < before
-            manager.size_of_remote -= sizeof(A)
-        end
+    # Keep track of the pre and post length so we only
+    # have to make one lookup in the hash table
+    before = length(manager.remote_objects)
+    delete!(manager.remote_objects, objectid(A))
+    if length(manager.remote_objects) < before
+        manager.size_of_remote -= sizeof(A)
     end
+
     return nothing
 end
 
@@ -105,6 +105,7 @@ end
 ##### Defrag support
 #####
 
+# TODO: Have arrays be able to opt-in to this kind of defrag updating.
 """
     updateremote!(x, A::Array)
 

@@ -1,5 +1,7 @@
+abstract type AbstractCachedArray{T,N} <: DenseArray{T,N} end
+
 # Must make this mutable so we can attach a finalizer to it.
-mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractArray{T,N}
+mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     # This is the underlying data array.
     # When this array is remote, we use `unsafe_wrap` to wrap our own pointer.
     array::Array{T,N}
@@ -14,7 +16,9 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractArray{T,N}
     manager::CacheManager
 
     # Lock to ensure only one thread can manage the store at a time.
-    movelock::ReentrantLock
+    # TODO: Removed this for now.
+    # Add back in if contention becomes a problem
+    #movelock::ReentrantLock
 
     # Should be conservative with this flag and always default to `true`.
     dirty::Bool
@@ -27,14 +31,12 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractArray{T,N}
         ) where {T,N,C}
 
         # Default settings.
-        movelock = ReentrantLock()
         dirty = true
 
         A = new{T,N,C}(
             array,
             parent,
             manager,
-            movelock,
             dirty,
         )
 
@@ -92,12 +94,13 @@ isclean(A::CachedArray) = !isdirty(A)
 #####
 
 Base.pointer(A::CachedArray) = pointer(A.array)
+Base.unsafe_convert(::Type{Ptr{T}}, A::CachedArray{T}) where {T} = pointer(A)
 @inline Base.size(A::CachedArray) = size(A.array)
 Base.sizeof(A::CachedArray) = sizeof(A.array)
 
 Base.@propagate_inbounds @inline Base.getindex(A::CachedArray, i::Int) = A.array[i]
 Base.@propagate_inbounds @inline Base.setindex!(A::CachedArray, v, i::Int) = setindex!(A.array, v, i)
-Base.IndexStyle(::Type{<:CachedArray}) = Base.IndexLinear()
+Base.IndexStyle(::Type{<:AbstractCachedArray}) = Base.IndexLinear()
 
 # "Similar" variants in all their glory!
 # TODO: Think about how to propagate metadata ...
@@ -121,10 +124,10 @@ end
 #####
 
 # Hijack broadcasting so we prioritize CachedArrays.
-const CachedStyle = Broadcast.ArrayStyle{CachedArray}
-Base.BroadcastStyle(::Type{<:CachedArray}) = CachedStyle()
+const AbstractCachedStyle = Broadcast.ArrayStyle{AbstractCachedArray}
+Base.BroadcastStyle(::Type{<:AbstractCachedArray}) = AbstractCachedStyle()
 
-function Base.similar(bc::Broadcast.Broadcasted{CachedStyle}, ::Type{ElType}) where {ElType}
+function Base.similar(bc::Broadcast.Broadcasted{AbstractCachedStyle}, ::Type{ElType}) where {ElType}
     return similar(CachedArray{ElType}, axes(bc))
 end
 
@@ -132,67 +135,52 @@ end
 ##### API for fetching and storing the array.
 #####
 
-function prefetch!(A::CachedArray, force = false)
-    # Quick path - if the array is alread local, we don't have to do anything.
-    # This could be racey if something else is pushing this array to the remote store,
-    # so we provide an option to force capturing the lock.
-    if !force
-        islocal(A) && return nothing
-    end
-
+function prefetch!(A::CachedArray)
     # Make sure we have the lock
-    Base.@lock A.movelock begin
-        islocal(A) && return nothing
+    islocal(A) && return nothing
 
-        # Need to allocate a local array.
-        localstorage = similar(_array(A))
+    # Need to allocate a local array.
+    localstorage = similar(_array(A))
 
-        # TODO: Fast copy
-        copyto!(localstorage, _array(A))
-        registerlocal!(A.manager, A)
+    # TODO: Fast copy using AVX
+    copyto!(localstorage, _array(A))
+    registerlocal!(A.manager, A)
 
-        # Update the CachedArray
-        A.parent = _array(A)
-        A.array = localstorage
+    # Update the CachedArray
+    A.parent = _array(A)
+    A.array = localstorage
 
-        # Be pessimistic with the `dirty` flag.
-        # This can be cleared by later uses, but shouldn't be the default.
-        A.dirty = true
-    end
+    # Be pessimistic with the `dirty` flag.
+    # This can be cleared by later uses, but shouldn't be the default.
+    A.dirty = true
 end
 
-function evict!(A::CachedArray, force = false)
-    if !force
-        isparent(A) && return nothing
-    end
+function evict!(A::CachedArray)
+    isparent(A) && return nothing
 
-    Base.@lock A.movelock begin
-        isparent(A) && return nothing
-
-        # Check if this array has a parent and is dirty.
-        # If so, just copy the local array to the parent.
-        hp = hasparent(A)
-        if A.dirty && hp
-            copyto!(parent(A), _array(A))
-            A.array = parent(A)
-            freelocal!(A.manager, A)
-            return nothing
-        end
-
-        # Regardless of whether this is clean or not, an eviction without a parent means
-        # we have to create the parent.
-        if !hp
-            P = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
-            A.array = P
-            A.parent = P
-            A.dirty = false
-
-            # Maintain status in the cache manager.
-            registerremote!(A.manager, A)
-            freelocal!(A.manager, A)
-        end
+    # Check if this array has a parent and is dirty.
+    # If so, just copy the local array to the parent.
+    hp = hasparent(A)
+    if A.dirty && hp
+        copyto!(parent(A), _array(A))
+        A.array = parent(A)
+        freelocal!(A.manager, A)
         return nothing
     end
+
+    # Regardless of whether this is clean or not, an eviction without a parent means
+    # we have to create the parent.
+    if !hp
+        P = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
+        A.array = P
+        A.parent = P
+        A.dirty = false
+
+        # Maintain status in the cache manager.
+        registerremote!(A.manager, A)
+        freelocal!(A.manager, A)
+    end
+    return nothing
 end
 
 #####
@@ -227,3 +215,5 @@ function unsafe_remote_alloc(
 
     return A
 end
+
+

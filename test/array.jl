@@ -65,5 +65,30 @@ end
     @test length(manager.remote_objects) == 0
     @test manager.size_of_local == 0
     @test manager.size_of_remote == 0
+
+    # Okay, now start doing some operations on arrays.
+    len = 2_000_000
+    A = CachedArray{Float32}(undef, len)
+    B = CachedArray{Float32}(undef, len)
+
+    vA = rand(Float32, len)
+    vB = rand(Float32, len)
+
+    A .= vA
+    B .= vB
+
+    @test manager.size_of_local == sizeof(A) + sizeof(B)
+    @test manager.size_of_remote == 0
+
+    # Do a broadcasting add - make sure the newly created object is a CachedArray
+    # and that it gets registered with the cache.
+    C = A .+ B
+    @test isa(C, CachedArray)
+    @test length(manager.local_objects) == 3
+
+    # Now do some timing to make sure the overhead of CachedArrays isn't stupid.
+    f!(C,A,B) = C .= A .+ B
+    f!(C,A,B)
+    @test (@allocated f!(C,A,B)) == 0
 end
 
