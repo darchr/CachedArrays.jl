@@ -47,6 +47,8 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     end
 end
 
+CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
+
 # Finalizer
 function cleanup(A::CachedArray)
     # Clean up local storage on the manager
@@ -97,6 +99,7 @@ Base.pointer(A::CachedArray) = pointer(A.array)
 Base.unsafe_convert(::Type{Ptr{T}}, A::CachedArray{T}) where {T} = pointer(A)
 @inline Base.size(A::CachedArray) = size(A.array)
 Base.sizeof(A::CachedArray) = sizeof(A.array)
+Base.elsize(::AbstractCachedArray{T}) where {T} = sizeof(T)
 
 Base.@propagate_inbounds @inline Base.getindex(A::CachedArray, i::Int) = A.array[i]
 Base.@propagate_inbounds @inline Base.setindex!(A::CachedArray, v, i::Int) = setindex!(A.array, v, i)

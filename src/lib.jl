@@ -1,35 +1,35 @@
 # Macro for defining our extensions.
-macro decorate(expr)
+macro prefetch(expr)
     # Add a "=nothing" to the end of the expression to make it a valid function definition.
     # This makes using the MacroTools built in methods easier to deal with.
-    _decorate(:($expr = nothing))
+    prefetch_impl(:($expr = nothing))
 end
 
 maybesuper(::AbstractCachedArray{T,N}) where {T,N} = DenseArray{T,N}
 maybesuper(::T) where {T} = T
 
-maybeprefetch(x) = nothing
-maybeprefetch(x::AbstractCachedArray) = prefetch!(x)
+# Define prefetching to do nothing for non-cached arrays.
+prefetch!(x) = nothing
+_esc(x) = :($(esc(x)))
 
-getname(ex::Expr) = first(ex.args)
-getname(ex::Symbol) = ex
-
-function _decorate(expr::Expr)
+function prefetch_impl(expr::Expr)
     def = splitdef(expr)
-    def[:args] = map(x -> :($(esc(x))), def[:args])
-    names = getname.(def[:args])
+    names = first.(MacroTools.splitarg.(def[:args]))
+    def[:args] = map(_esc, def[:args])
 
     prefetch = map(names) do arg
-        :(maybeprefetch($(esc(arg))))
+        :(prefetch!($(esc(arg))))
     end
 
     tupletype = map(names) do arg
         :(maybesuper($(esc(arg))))
     end
 
+    # Here, we force julia to call the next most specific definition.
+    # We just use direct overloading as a trick to get the prefetch calls in.
     def[:body] = quote
         $(prefetch...)
-        Base.invoke($(def[:name]), Tuple{$(tupletype...)}, $(esc.(names)...); $(def[:kwargs]...))
+        return Base.invoke($(def[:name]), Tuple{$(tupletype...)}, $(esc.(names)...); $(def[:kwargs]...))
     end
 
     return MacroTools.combinedef(def)
@@ -40,5 +40,5 @@ end
 #####
 
 # Prefetch before *
-@decorate Base.:*(A::CachedArray, B::CachedArray)
+@prefetch Base.:*(A::CachedArray, B::CachedArray)
 
