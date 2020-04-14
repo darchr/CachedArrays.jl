@@ -15,35 +15,32 @@ function Dummy(size, manager::CachedArrays.CacheManager, isremote = false)
 
     # Clean this up from the cache when we're done.
     finalizer(D) do x
-        if x.isremote
-            CachedArrays.freeremote!(x.manager, x)
-        else
-            CachedArrays.freelocal!(x.manager, x)
-        end
+        x.isremote ? CachedArrays.freeremote!(x) : CachedArrays.freelocal!(x)
+        return nothing
     end
 
     return D
 end
 
 CachedArrays.id(x::Dummy) = x.id
+CachedArrays.manager(x::Dummy) = x.manager
 
 function CachedArrays.move_to_remote!(x::Dummy)
     x.isremote = true
-    CachedArrays.registerremote!(x.manager, x)
     return nothing
 end
 
 function makedummy(size, manager)
     # Make the object and register it with the manager.
     D = Dummy(size, manager, false)
-    CachedArrays.registerlocal!(manager, D)
+    CachedArrays.registerlocal!(D)
     return D
 end
 
 function prefetch!(D::Dummy)
     D.isremote = false
-    CachedArrays.registerlocal!(D.manager, D)
-    CachedArrays.freeremote!(D.manager, D)
+    CachedArrays.registerlocal!(D)
+    CachedArrays.freeremote!(D)
     return nothing
 end
 
@@ -57,6 +54,7 @@ Base.sizeof(D::Dummy) = D.size
     A = makedummy(600, manager)
     @test CachedArrays.localsize(manager) == sizeof(A)
     @test A.isremote == false
+    @test_throws AssertionError CachedArrays.registerlocal!(A)
 
     B = makedummy(300, manager)
     @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(B)
@@ -71,6 +69,7 @@ Base.sizeof(D::Dummy) = D.size
     @test A.isremote == true
     @test B.isremote == false
     @test C.isremote == false
+    @test_throws AssertionError CachedArrays.registerremote!(A)
 
     # Prefetch A, should kick out both B and C
     prefetch!(A)

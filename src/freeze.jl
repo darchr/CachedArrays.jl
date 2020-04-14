@@ -48,8 +48,9 @@ end
 ##### Cached API
 #####
 
-id(x::FrozenCachedArray) = id(x.array)
 MacroTools.@forward FrozenCachedArray.array (
+    id,
+    manager,
     parent,
     isparent,
     hasparent,

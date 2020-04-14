@@ -6,5 +6,5 @@ include("policy/lru.jl")
 
 include("memkind.jl")
 include("cache.jl")
-#include("array.jl")
+include("array.jl")
 

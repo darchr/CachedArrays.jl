@@ -48,7 +48,7 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
         # is never called.
         if !issmall(A)
             finalizer(cleanup, A)
-            registerlocal!(manager, A)
+            registerlocal!(A)
         end
         return A
     end
@@ -57,6 +57,7 @@ end
 CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
 
 id(x::AbstractCachedArray) = x.id
+manager(x::AbstractCachedArray) = x.manager
 
 # Finalizer
 function cleanup(A::CachedArray)
@@ -64,12 +65,12 @@ function cleanup(A::CachedArray)
 
     # Clean up local storage on the manager
     if islocal(A)
-        freelocal!(A.manager, A)
+        freelocal!(A)
     end
 
     # Call `free` on the remote array and clean up remote statistics on the manager.
     if hasparent(A)
-        freeremote!(A.manager, A)
+        freeremote!(A)
         MemKind.free(A.manager.kind, pointer(parent(A)))
     end
 end
@@ -160,7 +161,7 @@ function prefetch!(A::CachedArray)
 
     # TODO: Fast copy using AVX
     copyto!(localstorage, _array(A))
-    registerlocal!(A.manager, A)
+    registerlocal!(A)
 
     # Update the CachedArray
     A.parent = _array(A)
@@ -183,18 +184,18 @@ function evict!(A::CachedArray)
     if isdirty(A) || !hasparent(A)
         move_to_remote!(A)
     end
-    freelocal!(A.manager, A)
+    freelocal!(A)
+    registerremote!(A)
 
     return nothing
 end
 
 function move_to_remote!(A::CachedArray)
     if !hasparent(A)
-        A.parent = unsafe_remmote_alloc(typeof(_array(A)), A.manager, size(A))
+        A.parent = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
     end
     copyto!(parent(A), _array(A))
     A.array = parent(A)
-    registerremote!(A.manager, A)
 
     return nothing
 end

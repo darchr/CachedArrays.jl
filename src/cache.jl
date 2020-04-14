@@ -1,7 +1,7 @@
 # Maintains Cache management.
 
 # Tunable Constants
-const SMALL_ALLOC_SIZE = 1024   # Arrays with a small enough size aren't tracked
+const SMALL_ALLOC_SIZE = -1   # Arrays with a small enough size aren't tracked
 
 # TODO: Maybe make one of these per thread to cut down on the number of locks that have
 # to be grabbed?
@@ -77,6 +77,9 @@ function getid(manager::CacheManager)
     return id
 end
 
+id(x) = error("Implement `id` for $(typeof(x))")
+manager(x) = error("Implement `manager` for $(typeof(x))")
+
 # Defer to the local cache
 localsize(manager::CacheManager) = currentsize(manager.cache)
 remotesize(manager::CacheManager) = manager.size_of_remote
@@ -84,8 +87,8 @@ remotesize(manager::CacheManager) = manager.size_of_remote
 # Manage the eviction of an item from the cache.
 function managed_evict(manager::CacheManager, id::UInt, x = manager.local_objects[id].value)
     # Move this object to the remote store.
-    # This will automatically register it remotely.
     move_to_remote!(x)
+    registerremote!(x)
 
     # Perform out own cleanup.
     # Since this happens on a callback, we can be sure that this object is not in the
@@ -104,43 +107,42 @@ end
 ##### API for adding and removing items from the
 #####
 
-function registerlocal!(manager::CacheManager, A)
-    @check !haskey(manager.local_objects, id(A))
+function registerlocal!(A, M::CacheManager = manager(A))
+    @check !haskey(M.local_objects, id(A))
 
     # Add this array to the list of local objects.
-    push!(manager.cache, id(A), sizeof(A); cb = x -> managed_evict(manager, x))
-    manager.local_objects[id(A)] = WeakRef(A)
+    push!(M.cache, id(A), sizeof(A); cb = x -> managed_evict(M, x))
+    M.local_objects[id(A)] = WeakRef(A)
 
     return nothing
 end
 
-updatelocal!(manager::CacheManager, A) = update!(manager.cache, id(A), sizeof(A))
+updatelocal!(A, M::CacheManager = manager(A)) = update!(M.cache, id(A), sizeof(A))
 
-function freelocal!(manager::CacheManager, A)
+function freelocal!(A, M::CacheManager = manager(A))
     _id = id(A)
-    @check haskey(manager.local_objects, _id)
+    @check haskey(M.local_objects, _id)
 
-    delete!(manager.local_objects, _id)
-    delete!(manager.cache, _id, sizeof(A))
-
-    return nothing
-end
-
-function registerremote!(manager::CacheManager, A)
-    @check !haskey(manager.remote_objects, id(A))
-
-    manager.remote_objects[id(A)] = WeakRef(A)
-    manager.size_of_remote += sizeof(A)
+    delete!(M.local_objects, _id)
+    delete!(M.cache, _id, sizeof(A))
 
     return nothing
 end
 
-function freeremote!(manager::CacheManager, A)
-    @check haskey(manager.remote_objects, id(A))
+function registerremote!(A, M::CacheManager = manager(A))
+    @check !haskey(M.remote_objects, id(A))
 
-    delete!(manager.remote_objects, id(A))
-    manager.size_of_remote -= sizeof(A)
+    M.remote_objects[id(A)] = WeakRef(A)
+    M.size_of_remote += sizeof(A)
 
+    return nothing
+end
+
+function freeremote!(A, M::CacheManager = manager(A))
+    @check haskey(M.remote_objects, id(A))
+
+    delete!(M.remote_objects, id(A))
+    M.size_of_remote -= sizeof(A)
     return nothing
 end
 
