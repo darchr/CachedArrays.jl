@@ -15,13 +15,9 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     # Hints regarding storage
     manager::CacheManager
 
-    # Lock to ensure only one thread can manage the store at a time.
-    # TODO: Removed this for now.
-    # Add back in if contention becomes a problem
-    #movelock::ReentrantLock
-
     # Should be conservative with this flag and always default to `true`.
     dirty::Bool
+    id::UInt
 
     # Inner constructor - do a type chack and make sure the finalizer is attached.
     function CachedArray{T,N}(
@@ -29,6 +25,10 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
             parent,
             manager::C = GlobalManager[],
         ) where {T,N,C}
+
+        if !isbitstype(T)
+            throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
+        end
 
         # Default settings.
         dirty = true
@@ -38,19 +38,30 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
             parent,
             manager,
             dirty,
+            getid(manager),
         )
 
         # Attach finalizer.
-        finalizer(cleanup, A)
-        registerlocal!(manager, A)
+        #
+        # Small arrays always live in the local memory, so we never have to worry about
+        # a remote array being allocated and then being lost because the finalizer
+        # is never called.
+        if !issmall(A)
+            finalizer(cleanup, A)
+            registerlocal!(manager, A)
+        end
         return A
     end
 end
 
 CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
 
+id(x::AbstractCachedArray) = x.id
+
 # Finalizer
 function cleanup(A::CachedArray)
+    issmall(A) && return nothing
+
     # Clean up local storage on the manager
     if islocal(A)
         freelocal!(A.manager, A)
@@ -91,18 +102,21 @@ islocal(A::CachedArray) = isnothing(parent(A)) || !isparent(A)
 isdirty(A::CachedArray) = A.dirty
 isclean(A::CachedArray) = !isdirty(A)
 
+# Check for small sized arrays
+issmall(A::AbstractCachedArray) = sizeof(A) <= SMALL_ALLOC_SIZE
+
 #####
 ##### Array Interface
 #####
 
-Base.pointer(A::CachedArray) = pointer(A.array)
-Base.unsafe_convert(::Type{Ptr{T}}, A::CachedArray{T}) where {T} = pointer(A)
-@inline Base.size(A::CachedArray) = size(A.array)
-Base.sizeof(A::CachedArray) = sizeof(A.array)
+Base.pointer(A::AbstractCachedArray) = pointer(A.array)
+Base.unsafe_convert(::Type{Ptr{T}}, A::AbstractCachedArray{T}) where {T} = pointer(A)
+@inline Base.size(A::AbstractCachedArray) = size(A.array)
+Base.sizeof(A::AbstractCachedArray) = sizeof(A.array)
 Base.elsize(::AbstractCachedArray{T}) where {T} = sizeof(T)
 
-Base.@propagate_inbounds @inline Base.getindex(A::CachedArray, i::Int) = A.array[i]
-Base.@propagate_inbounds @inline Base.setindex!(A::CachedArray, v, i::Int) = setindex!(A.array, v, i)
+Base.@propagate_inbounds @inline Base.getindex(A::AbstractCachedArray, i::Int) = A.array[i]
+Base.@propagate_inbounds @inline Base.setindex!(A::AbstractCachedArray, v, i::Int) = setindex!(A.array, v, i)
 Base.IndexStyle(::Type{<:AbstractCachedArray}) = Base.IndexLinear()
 
 # "Similar" variants in all their glory!
@@ -119,8 +133,8 @@ function Base.similar(A::CachedArray, ::Type{S}, dims::Tuple{Vararg{Int64,N}}) w
     return similar(typeof(A), S, dims)
 end
 
-@inline Base.iterate(A::CachedArray) = iterate(A.array)
-@inline Base.iterate(A::CachedArray, i) = iterate(A.array, i)
+@inline Base.iterate(A::AbstractCachedArray) = iterate(A.array)
+@inline Base.iterate(A::AbstractCachedArray, i) = iterate(A.array, i)
 
 #####
 ##### Broadcasting
@@ -139,8 +153,7 @@ end
 #####
 
 function prefetch!(A::CachedArray)
-    # Make sure we have the lock
-    islocal(A) && return nothing
+    (issmall(A) || islocal(A)) && return nothing
 
     # Need to allocate a local array.
     localstorage = similar(_array(A))
@@ -159,32 +172,33 @@ function prefetch!(A::CachedArray)
 end
 
 function evict!(A::CachedArray)
-    isparent(A) && return nothing
+    (issmall(A) || isparent(A)) && return nothing
 
-    # Check if this array has a parent and is dirty.
-    # If so, just copy the local array to the parent.
+    # If this array does not have a parent and it's being evicted rather than freed,
+    # Then we have to create a parent array for it.
     hp = hasparent(A)
-    if A.dirty && hp
-        copyto!(parent(A), _array(A))
-        A.array = parent(A)
-        freelocal!(A.manager, A)
-        return nothing
-    end
 
-    # Regardless of whether this is clean or not, an eviction without a parent means
-    # we have to create the parent.
-    if !hp
-        P = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
-        A.array = P
-        A.parent = P
-        A.dirty = false
-
-        # Maintain status in the cache manager.
-        registerremote!(A.manager, A)
-        freelocal!(A.manager, A)
+    # If we just created the parent or if this array is dirty,
+    # we must move it to the remote storage.
+    if isdirty(A) || !hasparent(A)
+        move_to_remote!(A)
     end
+    freelocal!(A.manager, A)
+
     return nothing
 end
+
+function move_to_remote!(A::CachedArray)
+    if !hasparent(A)
+        A.parent = unsafe_remmote_alloc(typeof(_array(A)), A.manager, size(A))
+    end
+    copyto!(parent(A), _array(A))
+    A.array = parent(A)
+    registerremote!(A.manager, A)
+
+    return nothing
+end
+
 
 #####
 ##### Allocate remote arrays
