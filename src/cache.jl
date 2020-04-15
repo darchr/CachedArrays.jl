@@ -68,6 +68,10 @@ function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T
     return manager
 end
 
+function Base.resize!(M::CacheManager, maxsize)
+    return resize!(M.cache, maxsize; cb = x -> managed_evict(M, x))
+end
+
 inlocal(manager, x) = haskey(manager.local_objects, id(x))
 inremote(manager, x) = haskey(manager.remote_objects, id(x))
 
@@ -88,7 +92,12 @@ remotesize(manager::CacheManager) = manager.size_of_remote
 function managed_evict(manager::CacheManager, id::UInt, x = manager.local_objects[id].value)
     # Move this object to the remote store.
     move_to_remote!(x)
-    registerremote!(x)
+
+    # We could be evicting an object that is already tracking a remote object.
+    # If so, there's no need to register.
+    if !haskey(manager.remote_objects, id)
+        registerremote!(x)
+    end
 
     # Perform out own cleanup.
     # Since this happens on a callback, we can be sure that this object is not in the

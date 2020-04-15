@@ -1,9 +1,10 @@
 module CachedArrays
 
-export CachedArray
+export CachedArray#, FrozenCachedArray
 
 # Dependencies
 import DataStructures
+import SIMD
 using MacroTools
 
 # Control whether asserts are active
@@ -22,9 +23,14 @@ else
     end
 end
 
+# Bootstrap Utilities
+include("memkind.jl")
+include("memcpy.jl")
+
+# Cache eviction policies
 include("policy/lru.jl")
 
-include("memkind.jl")
+# Implementation of the arrays and cache manager
 include("cache.jl")
 include("array.jl")
 include("lib.jl")
