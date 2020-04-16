@@ -53,7 +53,7 @@ Base.empty!(C::LRUCache; cb = donothing) = free!(C, C.maxsize, cb)
 function Base.resize!(C::LRUCache, sz::Int; cb = donothing)
     # Set down the max size and free space until we fit in this size.
     C.maxsize = sz
-    free!(C, sz, cb)
+    free!(C, 0, cb)
     return nothing
 end
 

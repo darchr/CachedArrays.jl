@@ -36,8 +36,8 @@ mutable struct CacheManager{C}
     # The aggregate size of remote allocations.
     size_of_remote::Int
 
+    lock::ReentrantLock
     cache::C
-
 end
 
 function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T}
@@ -62,10 +62,19 @@ function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T
         object_count,
         remote_objects,
         size_of_remote,
+        ReentrantLock(),
         cache
     )
 
     return manager
+end
+
+function Base.show(io::IO, M::CacheManager)
+    println(io, "Cache Manager")
+    println(io, "    $(length(M.local_objects)) Local Objects")
+    println(io, "    $(length(M.remote_objects)) Remote Objects")
+    println(io, "    $(localsize(M) / 1E9) GB Local Memory Used")
+    println(io, "    $(remotesize(M) / 1E9) GB Remote Memory Used")
 end
 
 function Base.resize!(M::CacheManager, maxsize)
@@ -117,41 +126,54 @@ end
 #####
 
 function registerlocal!(A, M::CacheManager = manager(A))
-    @check !haskey(M.local_objects, id(A))
+    lock(M.lock) do
+        @check !haskey(M.local_objects, id(A))
 
-    # Add this array to the list of local objects.
-    push!(M.cache, id(A), sizeof(A); cb = x -> managed_evict(M, x))
-    M.local_objects[id(A)] = WeakRef(A)
+        # Add this array to the list of local objects.
+        push!(M.cache, id(A), sizeof(A); cb = x -> managed_evict(M, x))
+        M.local_objects[id(A)] = WeakRef(A)
+    end
 
     return nothing
 end
 
-updatelocal!(A, M::CacheManager = manager(A)) = update!(M.cache, id(A), sizeof(A))
+function updatelocal!(A, M::CacheManager = manager(A))
+    lock(M.lock) do
+        update!(M.cache, id(A), sizeof(A))
+    end
+end
 
 function freelocal!(A, M::CacheManager = manager(A))
-    _id = id(A)
-    @check haskey(M.local_objects, _id)
+    lock(M.lock) do
+        _id = id(A)
+        @check haskey(M.local_objects, _id)
 
-    delete!(M.local_objects, _id)
-    delete!(M.cache, _id, sizeof(A))
+        delete!(M.local_objects, _id)
+        delete!(M.cache, _id, sizeof(A))
+    end
 
     return nothing
 end
 
 function registerremote!(A, M::CacheManager = manager(A))
-    @check !haskey(M.remote_objects, id(A))
+    lock(M.lock) do
+        @check !haskey(M.remote_objects, id(A))
 
-    M.remote_objects[id(A)] = WeakRef(A)
-    M.size_of_remote += sizeof(A)
+        M.remote_objects[id(A)] = WeakRef(A)
+        M.size_of_remote += sizeof(A)
+    end
 
     return nothing
 end
 
 function freeremote!(A, M::CacheManager = manager(A))
-    @check haskey(M.remote_objects, id(A))
+    lock(M.lock) do
+        @check haskey(M.remote_objects, id(A))
 
-    delete!(M.remote_objects, id(A))
-    M.size_of_remote -= sizeof(A)
+        delete!(M.remote_objects, id(A))
+        M.size_of_remote -= sizeof(A)
+    end
+
     return nothing
 end
 

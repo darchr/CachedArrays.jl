@@ -126,11 +126,11 @@ function Base.similar(::Type{<:CachedArray}, ::Type{S}, dims::Tuple{Vararg{Int64
     return CachedArray{S}(undef, dims)
 end
 
-function Base.similar(::Type{<:CachedArray{T}}, dims::Tuple{Vararg{Int64,N}}) where {T,N}
-    return similar(CachedArray, T, dims)
+function Base.similar(::Type{array_style}, dims::Tuple{Vararg{Int64,N}}) where {T,array_style <: AbstractCachedArray{T},N}
+    return similar(array_style, T, dims)
 end
 
-function Base.similar(A::CachedArray, ::Type{S}, dims::Tuple{Vararg{Int64,N}}) where {S,N}
+function Base.similar(A::AbstractCachedArray, ::Type{S}, dims::Tuple{Vararg{Int64,N}}) where {S,N}
     return similar(typeof(A), S, dims)
 end
 
@@ -153,14 +153,15 @@ end
 ##### API for fetching and storing the array.
 #####
 
-function prefetch!(A::CachedArray)
+function prefetch!(A::CachedArray; dirty = true)
     (issmall(A) || islocal(A)) && return nothing
 
     # Need to allocate a local array.
     localstorage = similar(_array(A))
 
     # TODO: Fast copy using AVX
-    copyto!(localstorage, _array(A))
+    #copyto!(localstorage, _array(A))
+    memcpy!(localstorage, _array(A))
     registerlocal!(A)
 
     # Update the CachedArray
@@ -169,7 +170,7 @@ function prefetch!(A::CachedArray)
 
     # Be pessimistic with the `dirty` flag.
     # This can be cleared by later uses, but shouldn't be the default.
-    A.dirty = true
+    A.dirty = dirty
 end
 
 function evict!(A::CachedArray)
@@ -181,11 +182,14 @@ function evict!(A::CachedArray)
 
     # If we just created the parent or if this array is dirty,
     # we must move it to the remote storage.
-    if isdirty(A) || !hasparent(A)
+    if isdirty(A) || !hp
         move_to_remote!(A)
     end
+    if !hp
+        registerremote!(A)
+    end
     freelocal!(A)
-    registerremote!(A)
+    A.dirty = false
 
     return nothing
 end
@@ -194,7 +198,8 @@ function move_to_remote!(A::CachedArray)
     if !hasparent(A)
         A.parent = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
     end
-    copyto!(parent(A), _array(A))
+    #copyto!(parent(A), _array(A))
+    memcpy!(parent(A), _array(A), true)
     A.array = parent(A)
 
     return nothing

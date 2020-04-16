@@ -1,6 +1,6 @@
 module CachedArrays
 
-export CachedArray#, FrozenCachedArray
+export CachedArray, LockedCachedArray
 
 # Dependencies
 import DataStructures
@@ -10,6 +10,7 @@ using MacroTools
 # Control whether asserts are active
 # Default to `true` for now because of development
 const DEBUG = get(ENV, "JULIA_CACHEDARRAYS_DEBUG", true)
+const THREADED_COPY = true
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
@@ -33,6 +34,7 @@ include("policy/lru.jl")
 # Implementation of the arrays and cache manager
 include("cache.jl")
 include("array.jl")
+include("locked.jl")
 include("lib.jl")
 
 # Global manager for the set of CachedArrays

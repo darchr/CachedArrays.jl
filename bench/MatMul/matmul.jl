@@ -17,7 +17,7 @@ function go(f, num, sz; iters = 1000)
     @time for _ in 1:iters
         x = rand(matrices) * rand(matrices)
         i = rand(1:length(matrices))
-        matrices[i] .= x
+        matrices[i] = x
     end
     return matrices
 end
