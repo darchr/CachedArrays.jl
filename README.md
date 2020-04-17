@@ -22,7 +22,7 @@ My intuition says that this should be different when going from DRAM to PMM vers
 
 Clone this repo into directory of your chosing with
 ```sh
-git clone https://github.com/darchr/CachedArrays.jl CacheArrays
+git clone https://github.com/darchr/CachedArrays.jl CachedArrays
 ```
 
 #### Environment Setup
