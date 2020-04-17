@@ -76,7 +76,19 @@ end
 # Top level entry point
 #
 # NOTE: Dest and Src must not alias!
-function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false; numworkers = nothing) where {T}
+"""
+    memcpy!(dest::AbstractArray, src::AbstractArray, [toremote = false]; [forcesingle])
+
+Copy the contents from `src` to `dest` using non-temporal AVX store instructions.
+Pass `toremote = true` if `dest` lives in PMM for better performance.
+Set keyword `forcesingle = true` to force only one thread to do the copy operations.
+
+LIMITATIONS
+-----------
+* `dest` and `src` must not alias at all.
+* The base pointers for `dest` and `src` must be 64-byte aligned.
+"""
+function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false; forcesingle = nothing) where {T}
     # Do type check
     if !isbitstype(T)
         throw(ArgumentError("Can only memcpy isbits types."))
@@ -103,18 +115,19 @@ function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false
         # Then only use 4 threads.
         #
         # Otherwise, use all available threads.
-        if isnothing(numworkers)
-            nchunks = toremote ? 4 : Threads.nthreads()
-        else
-            nchunks = numworkers
-        end
-        bytes_per_chunk, last_chunk = aligned_chunk(sizeof(dest), nchunks)
-
-        Threads.@threads for i in 1:nchunks
-            offset = bytes_per_chunk * (i-1)
-            copybytes = (i == nchunks) ? last_chunk : bytes_per_chunk
-            unsafe_memcpy!(+, dest_ptr + offset, src_ptr + offset, copybytes)
+        if !isnothing(forcesingle)
+            unsafe_memcpy!(+, dest_ptr, src_ptr, sizeof(dest))
             sfence()
+        else
+            nchunks = toremote ? 4 : Threads.nthreads()
+            bytes_per_chunk, last_chunk = aligned_chunk(sizeof(dest), nchunks)
+
+            Threads.@threads for i in 1:nchunks
+                offset = bytes_per_chunk * (i-1)
+                copybytes = (i == nchunks) ? last_chunk : bytes_per_chunk
+                unsafe_memcpy!(+, dest_ptr + offset, src_ptr + offset, copybytes)
+                sfence()
+            end
         end
     else
         unsafe_memcpy!(+, dest_ptr, src_ptr, sizeof(T) * length(src))
