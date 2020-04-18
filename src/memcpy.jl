@@ -73,6 +73,10 @@ function aligned_chunk(nbytes, nchunks)
     return (bytes_per_chunk, last_chunk)
 end
 
+_isaligned(x::Integer) = iszero(mod(x, 64))
+_isaligned(x::Ptr) = _isaligned(convert(Int, x))
+
+
 # Top level entry point
 #
 # NOTE: Dest and Src must not alias!
@@ -103,12 +107,17 @@ function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false
     src_ptr = convert(Ptr{UInt8}, pointer(src))
 
     # Do alignment checks
-    if !iszero(mod(convert(Int, dest_ptr), 64))
-        throw(ArgumentError("Destination is not aligned to a cache boundary!"))
+    if !_isaligned(dest_ptr) || !_isaligned(src_ptr)
+        @warn "Copying unaligned"
+        copyto!(dest, src)
+        return nothing
     end
-    if !iszero(mod(convert(Int, src_ptr), 64))
-        throw(ArgumentError("Source is not aligned to a cache boundary!"))
-    end
+    #if !iszero(mod(convert(Int, dest_ptr), 64))
+    #    throw(ArgumentError("Destination is not aligned to a cache boundary!"))
+    #end
+    #if !iszero(mod(convert(Int, src_ptr), 64))
+    #    throw(ArgumentError("Source is not aligned to a cache boundary!"))
+    #end
 
     @static if THREADED_COPY
         # Determine if we're moving to the remote array.

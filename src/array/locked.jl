@@ -14,6 +14,8 @@ struct LockedCachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     array::CachedArray{T,N,C}
 end
 
+LockedCachedArray(A::Array{T,N}) where {T,N} = lock(CachedArray(A))
+
 function LockedCachedArray{T}(::UndefInitializer, i::Integer) where {T}
     return LockedCachedArray{T}(undef, (convert(Int, i),))
 end
@@ -47,6 +49,18 @@ function Base.similar(
 end
 
 #####
+##### Broadcasting
+#####
+
+const LockedStyle = Broadcast.ArrayStyle{LockedCachedArray}
+
+Base.BroadcastStyle(::Type{<:LockedCachedArray}) = LockedStyle()
+function Base.similar(bc::Broadcast.Broadcasted{LockedStyle}, ::Type{ElType}) where {ElType}
+    return similar(LockedCachedArray{ElType}, axes(bc))
+end
+
+
+#####
 ##### Array API
 #####
 
@@ -75,10 +89,13 @@ function Base.copyto!(
     return copyto!(unlock(dest), desto, src, srco, N)
 end
 
-Base.copyto!(dest::LockedCachedArray, src::AbstractArray) = copyto!(unlock(dest), src)
-Base.copyto!(dest::LockedCachedArray, bc::Broadcast.Broadcasted) = copyto!(unlock(dest), bc)
+function Base.copyto!(dest::LockedCachedArray, src::AbstractArray)
+    return lock(copyto!(unlock(dest), src))
+end
 
-# TODO: `Similar` and friends
+function Base.copyto!(dest::LockedCachedArray, bc::Broadcast.Broadcasted)
+    return lock(copyto!(unlock(dest), bc))
+end
 
 #####
 ##### Cached API

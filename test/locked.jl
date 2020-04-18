@@ -71,7 +71,6 @@
 
         # Make sure that mixing and matching broadcasting still results in a LockedCachedArray.
         C = A .+ B
-        @show typeof(C)
         @test isa(C, LockedCachedArray)
         C = A .+ vA .+ 1
         @test isa(C, LockedCachedArray)

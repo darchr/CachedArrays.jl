@@ -5,6 +5,7 @@ export CachedArray, LockedCachedArray
 # Dependencies
 import DataStructures
 import SIMD
+#import ThreadPools
 using MacroTools
 
 # Control whether asserts are active
@@ -31,14 +32,23 @@ include("memcpy.jl")
 # Cache eviction policies
 include("policy/lru.jl")
 
+# Object Pools
+include("pool/pool.jl")
+
 # Implementation of the arrays and cache manager
-include("cache.jl")
-include("array.jl")
-include("locked.jl")
+include("cache/cache.jl")
+
+# Array Implementstions
+include("array/array.jl")
+include("array/locked.jl")
+
 include("lib.jl")
 
-# Global manager for the set of CachedArrays
-const GlobalManager = Ref{CacheManager{LRUCache{UInt}}}()
+
+# Global manager for the set of CachedArrays.
+# It's important to keep this concretely typed.
+const ManagerType = CacheManager{LRUCache{UInt},SimplePool{MemKindAllocator},SimplePool{AlignedAllocator}}
+const GlobalManager = Ref{ManagerType}()
 
 function __init__()
     # Create the global manager.

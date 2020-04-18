@@ -74,7 +74,7 @@ sizeof(dram)
 You can create an Array in PMM using
 ```julia
 # Create an array with 1000000 Float32's in PMM
-pmm = CachedArrays.remote_alloc(Array{Float32,1}, CachedArrays.GlobalManager[], (1000000,)
+pmm = CachedArrays.remote_alloc(CachedArrays.GlobalManager[], Array{Float32,1}, (1000000,)
 
 # Ensure pmm is initialized
 pmm .= zero(eltype(pmm))

@@ -40,5 +40,5 @@ end
 #####
 
 # Prefetch before *
-#@prefetch Base.:*(A::AbstractCachedArray, B::AbstractCachedArray)
+@prefetch Base.:*(A::AbstractCachedArray, B::AbstractCachedArray)
 

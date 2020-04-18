@@ -64,29 +64,26 @@ function cleanup(A::CachedArray)
     issmall(A) && return nothing
 
     # Clean up local storage on the manager
-    if islocal(A)
-        freelocal!(A)
-    end
-
-    # Call `free` on the remote array and clean up remote statistics on the manager.
-    if hasparent(A)
-        freeremote!(A)
-        MemKind.free(A.manager.kind, pointer(parent(A)))
-    end
+    islocal(A) && freelocal!(A)
+    hasparent(A) && freeremote!(A)
 end
 
 function CachedArray{T}(::UndefInitializer, i::Integer) where {T}
     return CachedArray{T}(undef, (convert(Int, i),))
 end
 
-function CachedArray{T}(::UndefInitializer, dims::NTuple{N,Int}) where {T,N}
-    # Default alloc to near memory
-    array = Array{T}(undef, dims)
+function CachedArray{T}(
+        ::UndefInitializer,
+        dims::NTuple{N,Int},
+        manager = GlobalManager[],
+    ) where {T,N}
 
+    array = local_alloc(manager, Array{T,N}, dims)
     # Default the `remote_ptr` to a null ptr
     A = CachedArray{T,N}(
         array,
         nothing,
+        manager,
     )
     return A
 end
@@ -126,8 +123,8 @@ function Base.similar(::Type{<:CachedArray}, ::Type{S}, dims::Tuple{Vararg{Int64
     return CachedArray{S}(undef, dims)
 end
 
-function Base.similar(::Type{array_style}, dims::Tuple{Vararg{Int64,N}}) where {T,array_style <: AbstractCachedArray{T},N}
-    return similar(array_style, T, dims)
+function Base.similar(::Type{A}, dims::Tuple{Vararg{Int64,N}}) where {T,A <: AbstractCachedArray{T},N}
+    return similar(A, T, dims)
 end
 
 function Base.similar(A::AbstractCachedArray, ::Type{S}, dims::Tuple{Vararg{Int64,N}}) where {S,N}
@@ -142,10 +139,11 @@ end
 #####
 
 # Hijack broadcasting so we prioritize CachedArrays.
-const AbstractCachedStyle = Broadcast.ArrayStyle{AbstractCachedArray}
-Base.BroadcastStyle(::Type{<:AbstractCachedArray}) = AbstractCachedStyle()
+#Jonst AbstractCachedStyle = Broadcast.ArrayStyle{AbstractCachedArray}
+const CachedStyle = Broadcast.ArrayStyle{CachedArray}
 
-function Base.similar(bc::Broadcast.Broadcasted{AbstractCachedStyle}, ::Type{ElType}) where {ElType}
+Base.BroadcastStyle(::Type{<:CachedArray}) = CachedStyle()
+function Base.similar(bc::Broadcast.Broadcasted{CachedStyle}, ::Type{ElType}) where {ElType}
     return similar(CachedArray{ElType}, axes(bc))
 end
 
@@ -157,7 +155,8 @@ function prefetch!(A::CachedArray; dirty = true)
     (issmall(A) || islocal(A)) && return nothing
 
     # Need to allocate a local array.
-    localstorage = similar(_array(A))
+    #localstorage = similar(_array(A))
+    localstorage = local_alloc(manager(A), typeof(_array(A)), size(_array(A)))
 
     # TODO: Fast copy using AVX
     #copyto!(localstorage, _array(A))
@@ -182,9 +181,7 @@ function evict!(A::CachedArray)
 
     # If we just created the parent or if this array is dirty,
     # we must move it to the remote storage.
-    if isdirty(A) || !hp
-        move_to_remote!(A)
-    end
+    move_to_remote!(A)
     if !hp
         registerremote!(A)
     end
@@ -195,48 +192,20 @@ function evict!(A::CachedArray)
 end
 
 function move_to_remote!(A::CachedArray)
-    if !hasparent(A)
-        A.parent = unsafe_remote_alloc(typeof(_array(A)), A.manager, size(A))
+    hp = hasparent(A)
+    dirty = isdirty(A)
+    if !hp
+        #A.parent = remote_alloc(typeof(_array(A)), A.manager, size(A))
+        A.parent = remote_alloc(manager(A), typeof(_array(A)), size(A))
     end
-    #copyto!(parent(A), _array(A))
-    memcpy!(parent(A), _array(A), true)
+
+    # Write back if the array is dirty of if the parent was just created.
+    if dirty || !hp
+        memcpy!(parent(A), _array(A), true)
+    end
     A.array = parent(A)
 
     return nothing
-end
-
-
-#####
-##### Allocate remote arrays
-#####
-
-function remote_alloc(::Type{Array{T,N}}, manager::CacheManager, dims::NTuple{N,Int}) where {T,N}
-    A = unsafe_remote_alloc(Array{T,N}, manager, dims)
-    finalizer(A) do x
-        MemKind.free(manager.kind, pointer(A))
-    end
-    return A
-end
-
-# Allocate an object in remote memory.
-function unsafe_remote_alloc(
-        ::Type{Array{T,N}},
-        manager::CacheManager,
-        dims::NTuple{N,Int}
-    ) where {T,N}
-
-    # Get the allocation size
-    sz = sizeof(T) * prod(dims)
-
-    # Perform the allocation, getting a raw pointer back
-    ptr = convert(Ptr{T}, MemKind.malloc(manager.kind, sz))
-
-    # Wrap the pointer in an array.
-    # We don't set the finalizer in this function because there are times when we want to
-    # manage the destruction of the array at a higher level.
-    A = unsafe_wrap(Array, ptr, dims; own = false)
-
-    return A
 end
 
 

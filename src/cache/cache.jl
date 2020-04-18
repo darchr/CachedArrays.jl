@@ -7,14 +7,10 @@ const SMALL_ALLOC_SIZE = -1   # Arrays with a small enough size aren't tracked
 # to be grabbed?
 #
 # TODO: Start to think about eviction policy.
-mutable struct CacheManager{C}
+mutable struct CacheManager{C,P,Q}
     # Kind pointer from MemKind
     # This keeps track of the remote memory.
     kind::MemKind.Kind
-
-    # TODO: Reintroduce if contention becomse an issue
-    # Otherwise, for now, keep main function calls single-threaded.
-    #lock::ReentrantLock
 
     # Reference to local objects
     #
@@ -35,9 +31,9 @@ mutable struct CacheManager{C}
 
     # The aggregate size of remote allocations.
     size_of_remote::Int
-
-    lock::ReentrantLock
     cache::C
+    remote_pool::P
+    local_pool::Q
 end
 
 function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T}
@@ -55,15 +51,19 @@ function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T
     # Initialize the cache
     cache = LRUCache{UInt}(maxsize)
 
+    remote_pool = SimplePool(MemKindAllocator(kind))
+    local_pool = SimplePool(AlignedAllocator())
+
     # Construct the manager.
-    manager = CacheManager{T}(
+    manager = CacheManager{T,typeof(remote_pool),typeof(local_pool)}(
         kind,
         local_objects,
         object_count,
         remote_objects,
         size_of_remote,
-        ReentrantLock(),
-        cache
+        cache,
+        remote_pool,
+        local_pool,
     )
 
     return manager
@@ -126,66 +126,98 @@ end
 #####
 
 function registerlocal!(A, M::CacheManager = manager(A))
-    lock(M.lock) do
-        @check !haskey(M.local_objects, id(A))
+    @check !haskey(M.local_objects, id(A))
 
-        # Add this array to the list of local objects.
-        push!(M.cache, id(A), sizeof(A); cb = x -> managed_evict(M, x))
-        M.local_objects[id(A)] = WeakRef(A)
-    end
+    # Add this array to the list of local objects.
+    push!(M.cache, id(A), sizeof(A); cb = x -> managed_evict(M, x))
+    M.local_objects[id(A)] = WeakRef(A)
 
     return nothing
 end
 
 function updatelocal!(A, M::CacheManager = manager(A))
-    lock(M.lock) do
-        update!(M.cache, id(A), sizeof(A))
-    end
+    update!(M.cache, id(A), sizeof(A))
 end
 
 function freelocal!(A, M::CacheManager = manager(A))
-    lock(M.lock) do
-        _id = id(A)
-        @check haskey(M.local_objects, _id)
+    _id = id(A)
+    @check haskey(M.local_objects, _id)
 
-        delete!(M.local_objects, _id)
-        delete!(M.cache, _id, sizeof(A))
-    end
+    delete!(M.local_objects, _id)
+    delete!(M.cache, _id, sizeof(A))
 
     return nothing
 end
 
 function registerremote!(A, M::CacheManager = manager(A))
-    lock(M.lock) do
-        @check !haskey(M.remote_objects, id(A))
+    @check !haskey(M.remote_objects, id(A))
 
-        M.remote_objects[id(A)] = WeakRef(A)
-        M.size_of_remote += sizeof(A)
-    end
+    M.remote_objects[id(A)] = WeakRef(A)
+    M.size_of_remote += sizeof(A)
 
     return nothing
 end
 
 function freeremote!(A, M::CacheManager = manager(A))
-    lock(M.lock) do
-        @check haskey(M.remote_objects, id(A))
+    @check haskey(M.remote_objects, id(A))
 
-        delete!(M.remote_objects, id(A))
-        M.size_of_remote -= sizeof(A)
-    end
+    delete!(M.remote_objects, id(A))
+    M.size_of_remote -= sizeof(A)
 
     return nothing
 end
 
 #####
-##### Defrag support
+##### Allocate remote arrays
 #####
 
-# TODO: Have arrays be able to opt-in to this kind of defrag updating.
-"""
-    updateremote!(x, A::Array)
+function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
 
-Update the remote storage in `x` to `A`.
-"""
-function updateremote! end
+    ptr = convert(Ptr{T}, alloc(manager.remote_pool, sizeof(T) * prod(dims)))
+    A = unsafe_wrap(Array, ptr, dims; own = false)
+    finalizer(A) do x
+        free(manager.remote_pool, convert(Ptr{Nothing}, pointer(x)))
+    end
+    return A
+end
+
+function local_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
+    ptr = convert(Ptr{T}, alloc(manager.local_pool, sizeof(T) * prod(dims)))
+    A = unsafe_wrap(Array, ptr, dims; own = false)
+    finalizer(A) do x
+        free(manager.local_pool, convert(Ptr{Nothing}, pointer(x)))
+    end
+    return A
+end
+
+# function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
+#     A = unsafe_remote_alloc(manager.kind, Array{T,N}, dims)
+#
+#     # TODO: Decide whether to return to a pool or not.
+#     finalizer(A) do x
+#         MemKind.free(manager.kind, pointer(x))
+#     end
+#     return A
+# end
+#
+# # Allocate an object in remote memory.
+# function unsafe_remote_alloc(
+#         kind::MemKind.Kind,
+#         ::Type{Array{T,N}},
+#         dims::NTuple{N,Int}
+#     ) where {T,N}
+#
+#     # Get the allocation size
+#     sz = sizeof(T) * prod(dims)
+#
+#     # Perform the allocation, getting a raw pointer back
+#     ptr = convert(Ptr{T}, MemKind.malloc(kind, sz))
+#
+#     # Wrap the pointer in an array.
+#     # We don't set the finalizer in this function because there are times when we want to
+#     # manage the destruction of the array at a higher level.
+#     A = unsafe_wrap(Array, ptr, dims; own = false)
+#
+#     return A
+# end
 

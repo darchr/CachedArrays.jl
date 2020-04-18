@@ -8,6 +8,7 @@ collection(f, num, sz) = [f(rand(Float32, sz, sz)) for _ in 1:num]
 go(num, sz; kw...) = go(identity, num, sz; kw...)
 
 function go(f, num, sz; iters = 1000)
+    #GC.gc()
     Random.seed!(123)
     matrices = collection(f, num, sz)
 

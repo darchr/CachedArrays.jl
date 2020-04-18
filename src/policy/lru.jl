@@ -43,6 +43,11 @@ end
 Make sure there is `sz` space avalable in `C`.
 """
 function free!(C::LRUCache, sz::Int, cb)
+    # Throw a more helpful error message if we're trying to free too much memory.
+    if sz > C.maxsize
+        error("Trying to free $sz bytes with a Cache maximum of $(C.maxsize)")
+    end
+
     while freespace(C) < sz
         pop!(C, cb)
     end
