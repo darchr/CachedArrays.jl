@@ -170,3 +170,96 @@
     @test CachedArrays.check(heap)
     @test CachedArrays.slowlength(heap) == 1
 end
+
+@testset "Testing Eviciton" begin
+    # Create a pretty small heap.
+    #
+    #                   32768
+    #        16384                 16384
+    #   8192       8192       8192       8192
+    # 4096 4096  4096 4096  4096 4096  4096 4096
+    allocator = CachedArrays.AlignedAllocator()
+    heap = CachedArrays.Heap(allocator, 4096 * 8)
+
+    # Allocate a 4096 byte chunk and a 8192 byte chunk.
+    function doallocation(heap)
+        @test CachedArrays.slowlength(heap) == 1
+        p0 = CachedArrays.alloc(heap, 3000, 0)
+        p1 = CachedArrays.alloc(heap, 6000, 1)
+        return (p0, p1)
+    end
+
+    p0, p1 = doallocation(heap)
+    b0 = CachedArrays.Block(p0 - CachedArrays.headersize())
+    b1 = CachedArrays.Block(p1 - CachedArrays.headersize())
+
+    @test b0.id == 0
+    @test b0.size == 4096
+    @test b1.id == 1
+    @test b1.size == 8192
+
+    @test CachedArrays.canallocfrom(heap, b0, 3000)
+    @test CachedArrays.canallocfrom(heap, b0, 6000)
+    @test CachedArrays.canallocfrom(heap, b0, 10000)
+    @test CachedArrays.canallocfrom(heap, b0, 20000)
+    @test !CachedArrays.canallocfrom(heap, b0, 40000)
+
+    @test CachedArrays.canallocfrom(heap, b1, 3000)
+    @test CachedArrays.canallocfrom(heap, b1, 6000)
+    @test CachedArrays.canallocfrom(heap, b1, 10000)
+    @test CachedArrays.canallocfrom(heap, b1, 20000)
+    @test !CachedArrays.canallocfrom(heap, b1, 40000)
+
+    # Get the free buddy for b0
+    b0_buddy = CachedArrays.Block(CachedArrays.address(b0) + 4096)
+    @test CachedArrays.canallocfrom(heap, b0_buddy, 3000)
+    @test CachedArrays.canallocfrom(heap, b0_buddy, 6000)
+    @test CachedArrays.canallocfrom(heap, b0_buddy, 10000)
+    @test CachedArrays.canallocfrom(heap, b0_buddy, 20000)
+    @test !CachedArrays.canallocfrom(heap, b0_buddy, 40000)
+
+    # Next step, try this eviction free schenanigans.
+    @test CachedArrays.check(heap)
+    ids = Int[]
+    CachedArrays.evictfrom!(heap, b0, 6000; cb = id -> push!(ids, id))
+    @test CachedArrays.check(heap)
+    # Should have evicted block zero
+    @test ids == [0]
+
+    # Pop the block from the free list - should be the block we just evicted.
+    b = CachedArrays.alloc(heap, 6000)
+    @test CachedArrays.check(heap)
+    @test b == pointer(b0) + CachedArrays.headersize()
+    CachedArrays.free(heap, b)
+    @test CachedArrays.check(heap)
+
+    # Okay, now put back start again.
+    CachedArrays.free(heap, p1)
+    @test CachedArrays.check(heap)
+    p0, p1 = doallocation(heap)
+
+    ids = Int[]
+    b0 = CachedArrays.Block(p0 - CachedArrays.headersize())
+    CachedArrays.evictfrom!(heap, b0, 10000; cb = id -> push!(ids, id))
+    # This should fail the buddy check
+    @test !CachedArrays.check(heap)
+
+    p2 = CachedArrays.alloc(heap, 10000, 3)
+    @test CachedArrays.check(heap)
+    @test ids == [0, 1]
+    @test CachedArrays.check(heap)
+
+    # Free everything again
+    CachedArrays.free(heap, p2)
+    @test CachedArrays.check(heap)
+    p0, p1 = doallocation(heap)
+
+    # Now, evict from p1
+    ids = Int[]
+    b1 = CachedArrays.Block(p1 - CachedArrays.headersize())
+    CachedArrays.evictfrom!(heap, b1, 10000; cb = id -> push!(ids, id))
+    @test ids == [0, 1]
+    p2 = CachedArrays.alloc(heap, 10000, 3)
+    @test CachedArrays.check(heap)
+    CachedArrays.free(heap, p2)
+end

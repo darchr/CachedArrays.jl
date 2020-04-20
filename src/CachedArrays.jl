@@ -54,7 +54,7 @@ include("lib.jl")
 
 # Global manager for the set of CachedArrays.
 # It's important to keep this concretely typed.
-const ManagerType = CacheManager{LRUCache{UInt},SimplePool{MemKindAllocator},Heap{AlignedAllocator}}
+const ManagerType = CacheManager{LRUCache{UInt},Heap{MemKindAllocator},Heap{AlignedAllocator}}
 const GlobalManager = Ref{ManagerType}()
 
 function __init__()

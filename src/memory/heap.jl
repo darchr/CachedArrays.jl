@@ -38,6 +38,10 @@ mutable struct Heap{T}
     base::Ptr{Nothing}
     len::Int
 
+    # Keep track of the pointers we have out in the wild.
+    # This helps us deal with double-frees.
+    active_pointers::Set{Ptr{Nothing}}
+
     # The start to blocks, indexed by their size in the buddy system.
     freelists::Vector{Block}
 end
@@ -59,6 +63,7 @@ function Heap(allocator::T, sz) where {T}
         allocator,
         base,
         sz,
+        Set{Ptr{Nothing}}(),
         freelists,
     )
 
@@ -247,30 +252,97 @@ end
 ##### High Level API
 #####
 
-function alloc(heap::Heap, bytes::Integer)
+function alloc(heap::Heap, bytes::Integer, id = nothing)
     iszero(bytes) && return nothing
 
     # Determine what bin this belongs to.
     # Make sure we include the sikkkkze of the header in this computation.
-    bin = getbin(max(bytes, MIN_ALLOCATION) + headersize())
+    bin = getbin(max(bytes + headersize(), MIN_ALLOCATION))
     block = pop_freelist!(heap, bin)
     if isnothing(block)
         return nothing
     else
         # Mark this block as used
         block.free = false
-        return pointer(block) + headersize()
+        !isnothing(id) && (block.id = id)
+        ptr = pointer(block) + headersize()
+        push!(heap.active_pointers, ptr)
+        return ptr
     end
 end
 
 free(heap::Heap, ptr::Ptr) = free(heap, convert(Ptr{Nothing}, ptr))
 function free(heap::Heap, ptr::Ptr{Nothing})
+    !in(ptr, heap.active_pointers) && return nothing
+
     # Get the block from the pointer
     block = Block(ptr - headersize())
     block.free = true
     @check !iszero(block.size)
     # Put that thing back where it came from, or so help me!
     putback!(heap, block)
+    return nothing
+end
+
+#####
+##### Utilities for eviction
+#####
+
+# Return `true` if we will be able to allocate a block of size `sz` by successively
+# freeing larger buddy blocks starting at `block`.
+function canallocfrom(heap::Heap, block::Block, sz)
+    bin = getbin(sz + headersize())
+    bin > numbins(heap) && return false
+    bsz = binsize(bin)
+    # Round up to the nearest multple of bsz
+    md = mod(address(block) - baseaddress(heap), bsz)
+
+    # If, starting at this address, we go down to the nearest block boundary that
+    # can contain this block, go up by the size, and still remain in the heap,
+    # then we can allocated from here.
+    return address(block) - md + bsz <= baseaddress(heap) + heap.len
+end
+
+# Work our way up the
+function evictfrom!(heap::Heap, block::Block, sz; cb = donothing)
+    bsz = binsize(getbin(sz + headersize()))
+    # Find the base block for this future allocation.
+    # We walk the heap through this block until we've freed everything.
+    start = Block(address(block) - mod(address(block) - baseaddress(heap), bsz))
+
+    stopaddress = address(start) + bsz
+    @check start.size < bsz
+
+    working = start
+    while address(working) < stopaddress
+        # If this block is free, remove it from the freelist.
+        if isfree(working)
+            remove!(heap, working)
+        else
+            # Override the normal collection procedure by deleting the pointer to
+            # this block from the tracked pointers.
+            #
+            # This will ensure that even if this block is returned to the heap, it
+            # won't be merged with its buddy
+            delete!(heap.active_pointers, pointer(working) + headersize())
+
+            # Get the ID for the object that lives here, force free the block and
+            # return it.
+            cb(working.id)
+            @check working.free == false
+            working.free = true
+        end
+
+        working = Block(address(working) + working.size)
+    end
+
+    # We should definitely end on a boundary.
+    @check address(working) == stopaddress
+
+    # Resize the start block and return it to the heap.
+    start.size = bsz
+    start.free = true
+    push_freelist!(heap, start)
     return nothing
 end
 

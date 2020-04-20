@@ -8,10 +8,6 @@ const SMALL_ALLOC_SIZE = -1   # Arrays with a small enough size aren't tracked
 #
 # TODO: Start to think about eviction policy.
 mutable struct CacheManager{C,P,Q}
-    # Kind pointer from MemKind
-    # This keeps track of the remote memory.
-    kind::MemKind.Kind
-
     # Reference to local objects
     #
     # This dict is keyed by an object's `id` which should be obtained from the manager upon
@@ -32,11 +28,16 @@ mutable struct CacheManager{C,P,Q}
     # The aggregate size of remote allocations.
     size_of_remote::Int
     cache::C
-    remote_pool::P
+    remote_heap::P
     local_heap::Q
 end
 
-function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T}
+function CacheManager{T}(
+        path::AbstractString;
+        localsize = 1_000_000_000,
+        remotesize = 1_000_000_000
+    ) where {T}
+
     # Allocate the backing memory
     #
     # For now, pass 0 - which essentially allows unlimited memory
@@ -49,20 +50,19 @@ function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T
     size_of_remote = 0
 
     # Initialize the cache
-    cache = LRUCache{UInt}(maxsize)
+    cache = LRUCache{UInt}(localsize)
 
-    remote_pool = SimplePool(MemKindAllocator(kind))
-    local_heap = Heap(AlignedAllocator(), maxsize)
+    remote_heap = Heap(MemKindAllocator(kind), remotesize)
+    local_heap = Heap(AlignedAllocator(), localsize)
 
     # Construct the manager.
-    manager = CacheManager{T,typeof(remote_pool),typeof(local_heap)}(
-        kind,
+    manager = CacheManager{T,typeof(remote_heap),typeof(local_heap)}(
         local_objects,
         object_count,
         remote_objects,
         size_of_remote,
         cache,
-        remote_pool,
+        remote_heap,
         local_heap,
     )
 
@@ -78,10 +78,18 @@ function Base.show(io::IO, M::CacheManager)
 end
 
 function Base.resize!(M::CacheManager, maxsize)
+    # Make sure there's nothing in the cache.
+    if !isempty(M.local_objects)
+        error("Can only resize empty caches!")
+    end
+
     # Step 1 - resize the LRU cache.
     resize!(M.cache, maxsize; cb = x -> managed_evict(M, x))
 
-    # Step 2 is tricky - we need to resize the heap manager ...
+    # Step 2 - replace the heap with the new size.
+    newheap = Heap(M.local_heap.allocator, maxsize)
+    M.local_heap = newheap
+    return nothing
 end
 
 inlocal(manager, x) = haskey(manager.local_objects, id(x))
@@ -176,10 +184,10 @@ end
 
 function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
 
-    ptr = convert(Ptr{T}, alloc(manager.remote_pool, sizeof(T) * prod(dims)))
+    ptr = convert(Ptr{T}, alloc(manager.remote_heap, sizeof(T) * prod(dims)))
     A = unsafe_wrap(Array, ptr, dims; own = false)
     finalizer(A) do x
-        free(manager.remote_pool, convert(Ptr{Nothing}, pointer(x)))
+        free(manager.remote_heap, convert(Ptr{Nothing}, pointer(x)))
     end
     return A
 end
