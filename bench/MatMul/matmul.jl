@@ -3,12 +3,11 @@ module MatMul
 using Random
 using CachedArrays
 
-collection(f, num, sz) = [f(rand(Float32, sz, sz)) for _ in 1:num]
+collection(f, num, sz) = [f(randn(Float32, sz, sz)) for _ in 1:num]
 
 go(num, sz; kw...) = go(identity, num, sz; kw...)
 
 function go(f, num, sz; iters = 1000)
-    #GC.gc()
     Random.seed!(123)
     matrices = collection(f, num, sz)
 

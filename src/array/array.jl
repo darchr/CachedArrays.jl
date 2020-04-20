@@ -20,10 +20,12 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     id::UInt
 
     # Inner constructor - do a type chack and make sure the finalizer is attached.
-    function CachedArray{T,N}(
+    # Mark this with an underscore because we want to make sure all cached arrays are
+    # allocated with our custom allocator.
+    function CachedArray{T,N,C}(
             array::Array{T,N},
             parent,
-            manager::C = GlobalManager[],
+            manager::C,
         ) where {T,N,C}
 
         if !isbitstype(T)
@@ -54,6 +56,12 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     end
 end
 
+function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) where {T,N,C}
+    _x = local_alloc(manager, typeof(x), size(x))
+    copyto!(_x, x)
+    return CachedArray{T,N,C}(_x, parent, manager)
+end
+
 CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
 
 id(x::AbstractCachedArray) = x.id
@@ -75,12 +83,12 @@ end
 function CachedArray{T}(
         ::UndefInitializer,
         dims::NTuple{N,Int},
-        manager = GlobalManager[],
-    ) where {T,N}
+        manager::C = GlobalManager[],
+    ) where {T,N,C}
 
     array = local_alloc(manager, Array{T,N}, dims)
     # Default the `remote_ptr` to a null ptr
-    A = CachedArray{T,N}(
+    A = CachedArray{T,N,C}(
         array,
         nothing,
         manager,

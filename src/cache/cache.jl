@@ -33,7 +33,7 @@ mutable struct CacheManager{C,P,Q}
     size_of_remote::Int
     cache::C
     remote_pool::P
-    local_pool::Q
+    local_heap::Q
 end
 
 function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T}
@@ -52,10 +52,10 @@ function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T
     cache = LRUCache{UInt}(maxsize)
 
     remote_pool = SimplePool(MemKindAllocator(kind))
-    local_pool = SimplePool(AlignedAllocator())
+    local_heap = Heap(AlignedAllocator(), maxsize)
 
     # Construct the manager.
-    manager = CacheManager{T,typeof(remote_pool),typeof(local_pool)}(
+    manager = CacheManager{T,typeof(remote_pool),typeof(local_heap)}(
         kind,
         local_objects,
         object_count,
@@ -63,7 +63,7 @@ function CacheManager{T}(path::AbstractString, maxsize = 1_000_000_000) where {T
         size_of_remote,
         cache,
         remote_pool,
-        local_pool,
+        local_heap,
     )
 
     return manager
@@ -78,7 +78,10 @@ function Base.show(io::IO, M::CacheManager)
 end
 
 function Base.resize!(M::CacheManager, maxsize)
-    return resize!(M.cache, maxsize; cb = x -> managed_evict(M, x))
+    # Step 1 - resize the LRU cache.
+    resize!(M.cache, maxsize; cb = x -> managed_evict(M, x))
+
+    # Step 2 is tricky - we need to resize the heap manager ...
 end
 
 inlocal(manager, x) = haskey(manager.local_objects, id(x))
@@ -182,42 +185,25 @@ function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,
 end
 
 function local_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
-    ptr = convert(Ptr{T}, alloc(manager.local_pool, sizeof(T) * prod(dims)))
+    ptr = alloc(manager.local_heap, sizeof(T) * prod(dims))
+
+    # If allocation failed, try a quick GC
+    if isnothing(ptr)
+        GC.gc(false)
+        ptr = alloc(manager.local_heap, sizeof(T) * prod(dims))
+    end
+
+    # If that still didn't work, try a full GC
+    if isnothing(ptr)
+        GC.gc(true)
+        ptr = alloc(manager.local_heap, sizeof(T) * prod(dims))
+    end
+
+    ptr = convert(Ptr{T}, ptr)
     A = unsafe_wrap(Array, ptr, dims; own = false)
     finalizer(A) do x
-        free(manager.local_pool, convert(Ptr{Nothing}, pointer(x)))
+        free(manager.local_heap, convert(Ptr{Nothing}, pointer(x)))
     end
     return A
 end
-
-# function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
-#     A = unsafe_remote_alloc(manager.kind, Array{T,N}, dims)
-#
-#     # TODO: Decide whether to return to a pool or not.
-#     finalizer(A) do x
-#         MemKind.free(manager.kind, pointer(x))
-#     end
-#     return A
-# end
-#
-# # Allocate an object in remote memory.
-# function unsafe_remote_alloc(
-#         kind::MemKind.Kind,
-#         ::Type{Array{T,N}},
-#         dims::NTuple{N,Int}
-#     ) where {T,N}
-#
-#     # Get the allocation size
-#     sz = sizeof(T) * prod(dims)
-#
-#     # Perform the allocation, getting a raw pointer back
-#     ptr = convert(Ptr{T}, MemKind.malloc(kind, sz))
-#
-#     # Wrap the pointer in an array.
-#     # We don't set the finalizer in this function because there are times when we want to
-#     # manage the destruction of the array at a higher level.
-#     A = unsafe_wrap(Array, ptr, dims; own = false)
-#
-#     return A
-# end
 

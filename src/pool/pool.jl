@@ -7,10 +7,6 @@ end
 Base.pointer(block::PoolBlock) = block.ptr
 Base.sizeof(block::PoolBlock) =  block.sz
 
-# In general, parameterize object pools by allocators, which are ultimately responsible
-# for providing memory.
-include("allocators.jl")
-
 abstract type AbstractPool{T <: AbstractAllocator} end
 
 # Default fallback

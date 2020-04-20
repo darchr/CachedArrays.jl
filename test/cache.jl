@@ -50,20 +50,20 @@ Base.sizeof(D::Dummy) = D.size
 @testset "Testing Operation of Cache Manager" begin
     # Now, we create a new cache manager with a smaller size to make sure that elements
     # of the caching mechanisms are working correctly.
-    manager = CachedArrays.CacheManager{CachedArrays.LRUCache{UInt}}(@__DIR__, 1000)
-    A = makedummy(600, manager)
+    manager = CachedArrays.CacheManager{CachedArrays.LRUCache{UInt}}(@__DIR__, 1000000)
+    A = makedummy(600000, manager)
     @test CachedArrays.localsize(manager) == sizeof(A)
     @test A.isremote == false
     @test_throws AssertionError CachedArrays.registerlocal!(A)
 
-    B = makedummy(300, manager)
+    B = makedummy(300000, manager)
     @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(B)
     @test CachedArrays.remotesize(manager) == 0
     @test A.isremote == false
     @test B.isremote == false
 
     # When we insert C, A should be evicted.
-    C = makedummy(500, manager)
+    C = makedummy(500000, manager)
     @test CachedArrays.localsize(manager) == sizeof(B) + sizeof(C)
     @test CachedArrays.remotesize(manager) == sizeof(A)
     @test A.isremote == true

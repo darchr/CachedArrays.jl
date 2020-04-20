@@ -18,65 +18,6 @@ const LOG2_MIN_ALLOCATION = ceil(Int, log2(MIN_ALLOCATION))
 getbin(sz) = ceil(Int, log2(sz)) - LOG2_MIN_ALLOCATION + 1
 binsize(i) = MIN_ALLOCATION * 2^(i-1)
 
-struct Block
-    ptr::Ptr{Nothing}
-end
-Block() = Block(Ptr{Nothing}(0))
-Block(address::UInt) = Block(Ptr{Nothing}(address))
-
-Base.pointer(x::Block) = getfield(x, :ptr)
-isnull(x::Block) = isnull(x.ptr)
-Base.isless(a::Block, b::Block) = a.ptr < b.ptr
-getbin(block::Block) = getbin(block.size)
-
-# Reserved room in for each allocation.
-headersize() = 64
-
-function Base.getproperty(x::Block, sym::Symbol)
-    if sym == :ptr
-        return pointer(x)
-    elseif sym == :size
-        # Load the first 8 bytes which encodes the size as a UInt64
-        # Mask out the lower 6 bits since those are reserved for other metadata.
-        sz = unsafe_load(convert(Ptr{UInt64}, pointer(x)))
-        return sz & ~UInt(0x3F)
-    elseif sym == :next
-        return unsafe_load(convert(Ptr{Block}, pointer(x) + 8))
-    elseif sym == :previous
-        return unsafe_load(convert(Ptr{Block}, pointer(x) + 16))
-
-    # Bitmask metadata
-    elseif sym == :bitmasks
-        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & UInt(0x3F)
-    elseif sym == :free
-        sz = unsafe_load(convert(Ptr{UInt64}, pointer(x)))
-        return Bool(sz & UInt(0x1))
-    else
-        error()
-    end
-end
-
-function Base.setproperty!(x::Block, name::Symbol, v)
-    if name == :size
-        sz = convert(UInt64, v) & ~UInt64(0x3f)
-        unsafe_store!(convert(Ptr{UInt64}, pointer(x)), sz | x.bitmasks)
-    elseif name == :next
-        unsafe_store!(convert(Ptr{Block}, pointer(x) + 8), v::Block)
-    elseif name == :previous
-        unsafe_store!(convert(Ptr{Block}, pointer(x) + 16), v::Block)
-    elseif name == :free
-        v::Bool
-        _ptr = convert(Ptr{UInt8}, pointer(x))
-        unsafe_store!(_ptr, (unsafe_load(_ptr) & ~(UInt8(1))) | UInt8(v))
-    else
-        error()
-    end
-end
-
-# Use the lower most bit to indicate if this block is free.
-isfree(x::Block) = x.free
-address(x::Block) = convert(UInt, pointer(x))
-
 # Get the buddy block for a given header.
 # Ptr is a pointer to the block that `header` belongs to.
 function getbuddy(heap, block::Block)
@@ -148,6 +89,8 @@ function Heap(allocator::T, sz) where {T}
             currentsize = currentsize >> 1
         end
     end
+    # Resize to reflect the amount of memory we are actually using.
+    heap.len -= size_left
     return heap
 end
 
@@ -256,13 +199,20 @@ function pop_freelist!(heap::Heap, bin)
         return nothing
     end
 
-    # Will recurse up, splitting blocks as necessary.
     if isnull(block)
-        next = pop_freelist!(heap, bin + 1)
-        isnothing(next) && return nothing
-        block, buddy = split!(heap, next)
+        # Could use recursion, but do this to avoid unnecessary stack growth.
+        # Find the first non-null block
+        range= bin+1:numbins(heap)
+        i = findfirst(x -> !isnull(heap.freelists[x]), range)
+        isnothing(i) && return nothing
+        index = range[i]
 
-        push_freelist!(heap, buddy)
+        block = pop_freelist!(heap, index)
+        local buddy
+        for _ in bin+1:index
+            block, buddy = split!(heap, block)
+            push_freelist!(heap, buddy)
+        end
         block.next = buddy
     end
 
@@ -322,6 +272,7 @@ function free(heap::Heap, ptr::Ptr{Nothing})
     # Get the block from the pointer
     block = Block(ptr - headersize())
     block.free = true
+    @check !iszero(block.size)
     # Put that thing back where it came from, or so help me!
     putback!(heap, block)
     return nothing
@@ -341,8 +292,12 @@ function freelist_length(heap::Heap, bin)
     return count
 end
 
-function zerocheck(heap::Heap)
+function zerocheck(heap::Heap, verbose = false)
     for (i, block) in enumerate(heap)
+        if verbose
+            println("Block: $(pointer(block))")
+            println("Size: $(block.size)")
+        end
         if block.size == 0
             println("Block: $(pointer(block))")
             println("Size: $(block.size)")
