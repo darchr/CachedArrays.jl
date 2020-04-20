@@ -1,9 +1,6 @@
 # A buddy-based heap allocator.
 # All allocations supplied by this allocator are aligned to 64B
 # We use a 64B header and footer to store metadata.
-#
-# TODO: Reimplement recursion in places with normal iteration to avoid destroying
-# the stack when using a large number of buckets.
 isnull(x::Ptr) = isnull(convert(UInt, x))
 isnull(x::UInt) = iszero(x)
 
@@ -231,19 +228,18 @@ function putback!(heap::Heap, block::Block)
     # Check if the buddy for this block is free.
     # If so, coaslesce the two of them together.
     buddy = getbuddy(heap, block)
-
-    if !isnothing(buddy) && isfree(buddy) && (buddy.size == block.size)
+    while !isnothing(buddy) && isfree(buddy) && (buddy.size == block.size)
         # Coalesce the two of them together.
         remove!(heap, buddy)
 
-        # Determine which is at the lower address.
-        # that is the base.
-        base = (block < buddy) ? block : buddy
-        base.size = base.size << 1
-        putback!(heap, base)
-    else
-        push_freelist!(heap, block)
+        block = (block < buddy) ? block : buddy
+        block.size = block.size << 1
+
+        # Check to see if we can go another iteration.
+        buddy = getbuddy(heap, block)
     end
+    push_freelist!(heap, block)
+
     return nothing
 end
 
@@ -255,7 +251,7 @@ function alloc(heap::Heap, bytes::Integer)
     iszero(bytes) && return nothing
 
     # Determine what bin this belongs to.
-    # Make sure we include the size of the header in this computation.
+    # Make sure we include the sikkkkze of the header in this computation.
     bin = getbin(max(bytes, MIN_ALLOCATION) + headersize())
     block = pop_freelist!(heap, bin)
     if isnothing(block)
