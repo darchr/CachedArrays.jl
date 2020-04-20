@@ -55,12 +55,13 @@ end
 
 @testset "Testing Array Correctness" begin
     # Grab ahold of the default manager so we can make sure it gets updated correctly.
+    GC.gc(true)
     manager = CachedArrays.GlobalManager[]
     resize!(manager, 1_000_000_000)
 
     # Run the GC test, then run garbage collection.
     gctest(manager)
-    GC.gc()
+    GC.gc(true)
 
     # Wrap this body of code in a "let" block to ensure that GC will clean up any temporary
     # arrays created in the body.

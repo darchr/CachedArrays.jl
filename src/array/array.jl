@@ -24,6 +24,7 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     # allocated with our custom allocator.
     function CachedArray{T,N,C}(
             array::Array{T,N},
+            id::UInt,
             parent,
             manager::C,
         ) where {T,N,C}
@@ -40,7 +41,7 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
             parent,
             manager,
             dirty,
-            getid(manager),
+            id,
         )
 
         # Attach finalizer.
@@ -57,9 +58,10 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
 end
 
 function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) where {T,N,C}
-    _x = local_alloc(manager, typeof(x), size(x))
+    id = getid(manager)
+    _x = local_alloc(manager, typeof(x), size(x), id)
     copyto!(_x, x)
-    return CachedArray{T,N,C}(_x, parent, manager)
+    return CachedArray{T,N,C}(_x, id, parent, manager)
 end
 
 CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
@@ -72,7 +74,11 @@ function cleanup(A::CachedArray)
     issmall(A) && return nothing
 
     # Clean up local storage on the manager
-    islocal(A) && freelocal!(A)
+    if islocal(A)
+        local_free(manager(A), _array(A))
+        freelocal!(A)
+    end
+
     hasparent(A) && freeremote!(A)
 end
 
@@ -86,10 +92,12 @@ function CachedArray{T}(
         manager::C = GlobalManager[],
     ) where {T,N,C}
 
-    array = local_alloc(manager, Array{T,N}, dims)
+    id = getid(manager)
+    array = local_alloc(manager, Array{T,N}, dims, id)
     # Default the `remote_ptr` to a null ptr
     A = CachedArray{T,N,C}(
         array,
+        id,
         nothing,
         manager,
     )
@@ -147,7 +155,6 @@ end
 #####
 
 # Hijack broadcasting so we prioritize CachedArrays.
-#Jonst AbstractCachedStyle = Broadcast.ArrayStyle{AbstractCachedArray}
 const CachedStyle = Broadcast.ArrayStyle{CachedArray}
 
 Base.BroadcastStyle(::Type{<:CachedArray}) = CachedStyle()
@@ -164,7 +171,7 @@ function prefetch!(A::CachedArray; dirty = true)
 
     # Need to allocate a local array.
     #localstorage = similar(_array(A))
-    localstorage = local_alloc(manager(A), typeof(_array(A)), size(_array(A)))
+    localstorage = local_alloc(manager(A), typeof(_array(A)), size(_array(A)), id(A))
 
     # TODO: Fast copy using AVX
     #copyto!(localstorage, _array(A))
@@ -211,6 +218,9 @@ function move_to_remote!(A::CachedArray)
     if dirty || !hp
         memcpy!(parent(A), _array(A), true)
     end
+
+    # Clean up the local array.
+    local_free(manager(A), _array(A))
     A.array = parent(A)
 
     return nothing

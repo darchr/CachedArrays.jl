@@ -16,7 +16,8 @@ mutable struct CacheManager{C,P,Q}
     #
     # NOTE: Make sure that the manager is updated whenever an object that enters itself
     # into the cache is finalized.
-    local_objects::Dict{UInt,WeakRef}
+    local_objects::Dict{UInt,Tuple{Ptr{Nothing},WeakRef}}
+    size_of_local::Int
 
     # Create a new ID for each object registerd in the cache.
     object_count::UInt
@@ -27,7 +28,7 @@ mutable struct CacheManager{C,P,Q}
 
     # The aggregate size of remote allocations.
     size_of_remote::Int
-    cache::C
+    policy::C
     remote_heap::P
     local_heap::Q
 end
@@ -43,14 +44,15 @@ function CacheManager{T}(
     # For now, pass 0 - which essentially allows unlimited memory
     kind = MemKind.create_pmem(path, 0)
 
-    local_objects = Dict{UInt,WeakRef}()
+    local_objects = Dict{UInt,Tuple{Ptr{Nothing},WeakRef}}()
+    size_of_local = 0
     object_count = one(UInt)
 
     remote_objects = Dict{UInt,WeakRef}()
     size_of_remote = 0
 
     # Initialize the cache
-    cache = LRUCache{UInt}(localsize)
+    policy = LRU{UInt}(localsize)
 
     remote_heap = Heap(MemKindAllocator(kind), remotesize)
     local_heap = Heap(AlignedAllocator(), localsize)
@@ -58,10 +60,11 @@ function CacheManager{T}(
     # Construct the manager.
     manager = CacheManager{T,typeof(remote_heap),typeof(local_heap)}(
         local_objects,
+        size_of_local,
         object_count,
         remote_objects,
         size_of_remote,
-        cache,
+        policy,
         remote_heap,
         local_heap,
     )
@@ -73,8 +76,8 @@ function Base.show(io::IO, M::CacheManager)
     println(io, "Cache Manager")
     println(io, "    $(length(M.local_objects)) Local Objects")
     println(io, "    $(length(M.remote_objects)) Remote Objects")
-    println(io, "    $(localsize(M) / 1E9) GB Local Memory Used")
-    println(io, "    $(remotesize(M) / 1E9) GB Remote Memory Used")
+    println(io, "    $(localsize(M) / 1E9) GB Local Memory Used of $(M.local_heap.len / 1E9)")
+    println(io, "    $(remotesize(M) / 1E9) GB Remote Memory Used of $(M.remote_heap.len / 1E9)")
 end
 
 function Base.resize!(M::CacheManager, maxsize)
@@ -83,12 +86,18 @@ function Base.resize!(M::CacheManager, maxsize)
         error("Can only resize empty caches!")
     end
 
-    # Step 1 - resize the LRU cache.
-    resize!(M.cache, maxsize; cb = x -> managed_evict(M, x))
-
     # Step 2 - replace the heap with the new size.
     newheap = Heap(M.local_heap.allocator, maxsize)
     M.local_heap = newheap
+    return nothing
+end
+
+function resize_remote!(M::CacheManager, maxsize)
+    if !isempty(M.remote_objects)
+        error("Can only resize empty caches!")
+    end
+    newheap = Heap(M.remote_heap.allocator, maxsize)
+    M.remote_heap = newheap
     return nothing
 end
 
@@ -104,12 +113,11 @@ end
 id(x) = error("Implement `id` for $(typeof(x))")
 manager(x) = error("Implement `manager` for $(typeof(x))")
 
-# Defer to the local cache
-localsize(manager::CacheManager) = currentsize(manager.cache)
+localsize(manager::CacheManager) = manager.size_of_local
 remotesize(manager::CacheManager) = manager.size_of_remote
 
 # Manage the eviction of an item from the cache.
-function managed_evict(manager::CacheManager, id::UInt, x = manager.local_objects[id].value)
+function managed_evict(manager::CacheManager, id::UInt, x = last(manager.local_objects[id]).value)
     # Move this object to the remote store.
     move_to_remote!(x)
 
@@ -124,11 +132,13 @@ function managed_evict(manager::CacheManager, id::UInt, x = manager.local_object
     # local cache.
     #
     # However, we perform a debug check anyways.
-    @check !in(id, manager.cache)
+    @check !in(id, manager.policy)
+    @check haskey(manager.local_objects, id)
 
-    # Thus the only local cleanup we have to do is remove this object from the list
-    # of locally tracked objects.
+    # Free this object from our local tracking.
     delete!(manager.local_objects, id)
+    manager.size_of_local -= sizeof(x)
+
     return nothing
 end
 
@@ -140,14 +150,15 @@ function registerlocal!(A, M::CacheManager = manager(A))
     @check !haskey(M.local_objects, id(A))
 
     # Add this array to the list of local objects.
-    push!(M.cache, id(A), sizeof(A); cb = x -> managed_evict(M, x))
-    M.local_objects[id(A)] = WeakRef(A)
+    push!(M.policy, id(A))
+    M.local_objects[id(A)] = (pointer(A), WeakRef(A))
+    M.size_of_local += sizeof(A)
 
     return nothing
 end
 
 function updatelocal!(A, M::CacheManager = manager(A))
-    update!(M.cache, id(A), sizeof(A))
+    update!(M.policy, id(A), sizeof(A))
 end
 
 function freelocal!(A, M::CacheManager = manager(A))
@@ -155,7 +166,8 @@ function freelocal!(A, M::CacheManager = manager(A))
     @check haskey(M.local_objects, _id)
 
     delete!(M.local_objects, _id)
-    delete!(M.cache, _id, sizeof(A))
+    delete!(M.policy, _id)
+    M.size_of_local -= sizeof(A)
 
     return nothing
 end
@@ -184,34 +196,102 @@ end
 
 function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
 
-    ptr = convert(Ptr{T}, alloc(manager.remote_heap, sizeof(T) * prod(dims)))
-    A = unsafe_wrap(Array, ptr, dims; own = false)
+    allocsize = sizeof(T) * prod(dims)
+    ptr = alloc(manager.remote_heap, allocsize)
+
+    # If we still don't have anything, run a full GC.
+    if isnothing(ptr)
+        GC.gc(true)
+        ptr = alloc(manager.remote_heap, allocsize)
+    end
+
+    A = unsafe_wrap(Array, convert(Ptr{T}, ptr), dims; own = false)
     finalizer(A) do x
         free(manager.remote_heap, convert(Ptr{Nothing}, pointer(x)))
     end
     return A
 end
 
-function local_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
-    ptr = alloc(manager.local_heap, sizeof(T) * prod(dims))
+#####
+##### Local Allocation.
+#####
 
-    # If allocation failed, try a quick GC
-    if isnothing(ptr)
-        GC.gc(false)
-        ptr = alloc(manager.local_heap, sizeof(T) * prod(dims))
-    end
+# Step 1: Try to just do a normal allocation.
+# Step 2: Run a quick GC and try to allocate again.
+# Step 3: Run a full GC - try again.
+# Step 4: Grab the bottom most item from the policy that we can evict to make room for
+#         the object we want to allocate.
+#
+#         Do that free operation.
 
-    # If that still didn't work, try a full GC
+function local_alloc(
+        manager::CacheManager,
+        ::Type{Array{T,N}},
+        dims::NTuple{N,Int},
+        id::UInt
+    ) where {T,N}
+
+    allocsize = sizeof(T) * prod(dims)
+    ptr = alloc(manager.local_heap, allocsize, id)
+
+    # If allocation failed, try a GC
     if isnothing(ptr)
         GC.gc(true)
-        ptr = alloc(manager.local_heap, sizeof(T) * prod(dims))
+        ptr = alloc(manager.local_heap, allocsize, id)
+    end
+
+    if isnothing(ptr)
+        doeviction!(manager, allocsize, id)
+        ptr = alloc(manager.local_heap, allocsize, id)
+    end
+
+    if isnothing(ptr)
+        error("Something's gone horribly wrong!")
     end
 
     ptr = convert(Ptr{T}, ptr)
     A = unsafe_wrap(Array, ptr, dims; own = false)
-    finalizer(A) do x
-        free(manager.local_heap, convert(Ptr{Nothing}, pointer(x)))
-    end
+
+    # Don't attach a finalizer.
+    # Cleanup MUST be managed by any object that calls this routine.
+    # This is to ensure that data that is evicted by the heap is immediately available for
+    # reuse.
+    #
+    # finalizer(A) do x
+    #     free(manager.local_heap, convert(Ptr{Nothing}, pointer(x)))
+    # end
+
     return A
+end
+
+local_free(manager::CacheManager, array::Array) = local_free(manager, pointer(array))
+local_free(manager::CacheManager, ptr::Ptr) = local_free(manager, convert(Ptr{Nothing}, ptr))
+local_free(manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.local_heap, ptr)
+
+function doeviction!(manager, allocsize, id)
+    stack = Priority{UInt}[]
+
+    local block
+    while true
+        # Pop an item from the LRU
+        push!(stack, fullpop!(manager.policy))
+
+        # Get the pointer for this object.
+        ptr = first(manager.local_objects[last(stack).val])
+        block = Block(ptr - headersize())
+
+        # Repeat until we get a block that will allow us to do this allocation.
+        canallocfrom(manager.local_heap, block, allocsize) && break
+    end
+
+    # Put back all of the items in the LRU that we didn't use.
+    pop!(stack)
+    while !isempty(stack)
+        push!(manager.policy, pop!(stack))
+    end
+
+    # Perform our managed eviction.
+    evictfrom!(manager.local_heap, block, allocsize; cb = id -> managed_evict(manager, id))
+    return nothing
 end
 

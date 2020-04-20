@@ -56,7 +56,6 @@ function Heap(allocator::T, sz) where {T}
     # Initialize the freelists.
     # First - figure out how many bins we need.
     maxbin = getbin(sz)
-    @show maxbin
     freelists = [Block() for _ in 1:maxbin]
 
     heap = Heap{T}(
@@ -311,7 +310,10 @@ function evictfrom!(heap::Heap, block::Block, sz; cb = donothing)
     start = Block(address(block) - mod(address(block) - baseaddress(heap), bsz))
 
     stopaddress = address(start) + bsz
-    @check start.size < bsz
+
+    # Can be equal if we're evicting a block that's the same size as the one we're trying
+    # to put in.
+    @check start.size <= bsz
 
     working = start
     while address(working) < stopaddress

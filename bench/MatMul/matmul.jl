@@ -12,9 +12,9 @@ function go(f, num, sz; iters = 1000)
     matrices = collection(f, num, sz)
 
     # Show the total size of all the matrices.
-    #@show sum(sizeof, matrices)
+    @show sum(sizeof, matrices)
 
-    for _ in 1:iters
+    @time for _ in 1:iters
         x = rand(matrices) * rand(matrices)
         i = rand(1:length(matrices))
         matrices[i] = x

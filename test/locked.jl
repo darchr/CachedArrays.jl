@@ -1,6 +1,6 @@
 @testset "Testing LockedArrays" begin
     # Create a new manager so old ones don't collide.
-    manager = CachedArrays.CacheManager{CachedArrays.LRUCache{UInt}}(@__DIR__)
+    manager = CachedArrays.CacheManager{CachedArrays.LRU{UInt}}(@__DIR__)
 
     # Make sure everything has been cleaned up from previous runs.
     @test CachedArrays.localsize(manager) == 0

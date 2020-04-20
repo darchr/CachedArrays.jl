@@ -28,6 +28,8 @@ else
     end
 end
 
+donothing(x...) = nothing
+
 # Bootstrap Utilities
 include("memkind.jl")
 include("memcpy.jl")
@@ -39,9 +41,6 @@ include("memory/heap.jl")
 # Cache eviction policies
 include("policy/lru.jl")
 
-# Object Pools
-include("pool/pool.jl")
-
 # Implementation of the arrays and cache manager
 include("cache/cache.jl")
 
@@ -51,10 +50,9 @@ include("array/locked.jl")
 
 include("lib.jl")
 
-
 # Global manager for the set of CachedArrays.
 # It's important to keep this concretely typed.
-const ManagerType = CacheManager{LRUCache{UInt},Heap{MemKindAllocator},Heap{AlignedAllocator}}
+const ManagerType = CacheManager{LRU{UInt},Heap{MemKindAllocator},Heap{AlignedAllocator}}
 const GlobalManager = Ref{ManagerType}()
 
 function __init__()
@@ -69,7 +67,7 @@ function __init__()
             you want to do, but is fine for testing.
         """
     end
-    GlobalManager[] = CacheManager{LRUCache{UInt}}(path)
+    GlobalManager[] = CacheManager{LRU{UInt}}(path)
 end
 
 

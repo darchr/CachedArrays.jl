@@ -1,7 +1,6 @@
 struct Priority{T}
     priority::Int
     val::T
-    sz::Int
 end
 
 getsize(P::Priority) = P.sz
@@ -10,10 +9,7 @@ Base.:(==)(a::P, b::P) where {P <: Priority} = a.priority == b.priority
 Base.hash(a::Priority, h::UInt = UInt(0x0)) = hash(a.priority, h)
 
 # LRU Policy for eviction.
-mutable struct LRUCache{T}
-    # Keep track of the maximum size for the cache as well as the current size.
-    maxsize::Int
-    currentsize::Int
+mutable struct LRU{T}
     count::Int
 
     # Wrap around a mutable binary heap.
@@ -23,100 +19,72 @@ mutable struct LRUCache{T}
     handles::Dict{T,Int}
 end
 
-donothing(x...) = nothing
-function LRUCache{T}(maxsize) where {T}
-    return LRUCache(
-        maxsize,
-        0,
+function LRU{T}(maxsize) where {T}
+    return LRU(
         0,
         DataStructures.MutableBinaryMinHeap{Priority{T}}(),
         Dict{T,Int}(),
     )
 end
 
-@inline freespace(C::LRUCache) = (C.maxsize - C.currentsize)
-@inline currentsize(C::LRUCache) = C.currentsize
-
 """
-    free!(C::LRUCache, sz::Int)
-
-Make sure there is `sz` space avalable in `C`.
-"""
-function free!(C::LRUCache, sz::Int, cb)
-    # Throw a more helpful error message if we're trying to free too much memory.
-    if sz > C.maxsize
-        error("Trying to free $sz bytes with a Cache maximum of $(C.maxsize)")
-    end
-
-    while freespace(C) < sz
-        pop!(C, cb)
-    end
-    return nothing
-end
-Base.empty!(C::LRUCache; cb = donothing) = free!(C, C.maxsize, cb)
-
-function Base.resize!(C::LRUCache, sz::Int; cb = donothing)
-    # Set down the max size and free space until we fit in this size.
-    C.maxsize = sz
-    free!(C, 0, cb)
-    return nothing
-end
-
-"""
-    pop!(C::LRUCache)
+    pop!(C::LRU)
 
 Remove the least recently used item from the cache and return it.
 """
-function Base.pop!(C::LRUCache, cb)
+function Base.pop!(C::LRU)
     # Pop items off the top of the heap.
     # Keep doing this as long as we are getting sentinels.
     v = pop!(C.heap)
     delete!(C.handles, v.val)
-
-    # Now, we have a nonsentinel value.
-    # Update the current size and then perform the callback
-    C.currentsize -= getsize(v)
-    cb(v.val)
     return v.val
 end
 
-function Base.push!(C::LRUCache, v, sz; cb = donothing)
+function fullpop!(C::LRU)
+    v = pop!(C.heap)
+    delete!(C.handles, v.val)
+    return v
+end
+
+function Base.push!(C::LRU{T}, v::T) where {T}
     # Assert this for now.
     @check !haskey(C.handles, v)
 
-    # Free up space for this object.
-    free!(C, sz, cb)
-
     # Add this to the heap and record its handle.
-    C.handles[v] = push!(C.heap, Priority(C.count, v, sz))
+    C.handles[v] = push!(C.heap, Priority(C.count, v))
     C.count += 1
-    C.currentsize += sz
+    return v
+end
+
+function Base.push!(C::LRU{T}, v::Priority{T}) where {T}
+    @check !haskey(C.handles, v.val)
+    C.handles[v.val] = push!(C.heap, v)
+    return v
 end
 
 """
-    update!(C::LRUCache, v)
+    update!(C::LRU, v)
 
 Update `v` to the bottom of the heap.
 """
-function update!(C::LRUCache, v, sz)
+function update!(C::LRU, v, sz)
     delete!(C.heap, C.handles[v])
     C.handles[v] = push!(C.heap, Priority(C.count, v, sz))
     C.count += 1
 end
 
 """
-    delete!(C::LRUManager, v, sz)
+    delete!(C::LRUManager, v)
 
 Delete `v` from the cache.
 This is assumed to be a user-invoked method and the callback will **NOT** be called on
 the removed item.
 """
-function Base.delete!(C::LRUCache, v, sz)
+function Base.delete!(C::LRU, v)
     delete!(C.heap, C.handles[v])
     delete!(C.handles, v)
-    C.currentsize -= sz
     return C
 end
 
-Base.in(v, C::LRUCache) = haskey(C.handles, v)
+Base.in(v, C::LRU) = haskey(C.handles, v)
 
