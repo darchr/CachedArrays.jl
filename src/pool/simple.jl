@@ -6,25 +6,18 @@
 # that have been previously freed.
 #
 # These are already initialized.
-struct Block
-    ptr::Ptr{Nothing}
-    sz::Int
-end
-
-Base.pointer(block::Block) = block.ptr
-Base.sizeof(block::Block) =  block.sz
 
 #####
 ##### Simple Pool
 #####
 
 # Simple Pool
-mutable struct SimplePool{T <: AbstractAllocator}
+mutable struct SimplePool{T <: AbstractAllocator} <: AbstractPool{T}
     allocator::T
 
     # Keep track of the blocks in use.
-    allocated::Dict{Ptr{Nothing},Block}
-    blocks_available::Set{Block}
+    allocated::Dict{Ptr{Nothing},PoolBlock}
+    blocks_available::Set{PoolBlock}
 
     # Keep track of the number of times we've failed to deliver a block from our local
     # pool.
@@ -36,24 +29,12 @@ end
 function SimplePool(allocator) where {M,F}
     return SimplePool(
         allocator,
-        Dict{Ptr{Nothing},Block}(),
-        Set{Block}(),
+        Dict{Ptr{Nothing},PoolBlock}(),
+        Set{PoolBlock}(),
         0,
         # TODO: Tune this parameter
         10000,
     )
-end
-
-# Bottom level malloc and free
-function actual_alloc(pool::SimplePool, sz)
-    ptr = alloc(pool.allocator, sz)
-    block = Block(ptr, sz)
-    return block
-end
-
-function actual_free(pool::SimplePool, block::Block)
-    free(pool.allocator, pointer(block))
-    return nothing
 end
 
 # The maximum size a pooled block can be to fulfill a request.
@@ -63,7 +44,7 @@ function scan(pool::SimplePool, sz)
     for block in pool.blocks_available
         if sz <= sizeof(block) <= maxoversize(sz)
             delete!(pool.blocks_available, block)
-            #println("Returning Requested Block")
+            #println("Returning Requested PoolBlock")
             return block
         end
     end
@@ -71,12 +52,12 @@ function scan(pool::SimplePool, sz)
 end
 
 # Send `sz` bytes back to the original allocator.
-function reclaim(pool::SimplePool, sz::Int = typemax(Int))
+function reclaim!(pool::SimplePool, sz::Int = typemax(Int))
     freedbytes = 0
     while freedbytes < sz && !isempty(pool.blocks_available)
         block = pop!(pool.blocks_available)
         freedbytes += sizeof(block)
-        actual_free(pool, block)
+        __free(pool, block)
     end
     return freedbytes
 end
@@ -103,8 +84,8 @@ function _alloc(pool::SimplePool, sz)
     isnothing(block) || return block
 
     # If we failed again, for now, just trigger a full reclamation.
-    reclaim(pool)
-    return actual_alloc(pool, sz)
+    reclaim!(pool)
+    return __alloc(pool, sz)
 end
 
 _free(pool::SimplePool, block) = push!(pool.blocks_available, block)

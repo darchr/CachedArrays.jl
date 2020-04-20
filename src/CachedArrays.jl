@@ -2,6 +2,9 @@ module CachedArrays
 
 export CachedArray, LockedCachedArray
 
+# stdlib
+import Dates
+
 # Dependencies
 import DataStructures
 import SIMD
@@ -28,6 +31,8 @@ end
 # Bootstrap Utilities
 include("memkind.jl")
 include("memcpy.jl")
+
+include("memory/heap.jl")
 
 # Cache eviction policies
 include("policy/lru.jl")
