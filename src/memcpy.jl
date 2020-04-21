@@ -1,5 +1,4 @@
 # Memcopy based on AvX instructions.
-
 """
     _mov(src::Ptr, dest::Ptr, ::Val{N}) where {N}
 
@@ -9,7 +8,7 @@ Unroll move `N` elements from `src` to `ptr`.
         ::Type{SIMD.Vec{N,T}},
         dest::Ptr{UInt8},
         src::Ptr{UInt8},
-        ::Val{U}
+        ::Val{U},
     ) where {N,T,U}
 
     loads = load_impl(SIMD.Vec{N,T}, U)
@@ -79,7 +78,9 @@ _isaligned(x::Ptr) = _isaligned(convert(Int, x))
 
 # Top level entry point
 #
+#
 # NOTE: Dest and Src must not alias!
+
 """
     memcpy!(dest::AbstractArray, src::AbstractArray, [toremote = false]; [forcesingle])
 
@@ -92,7 +93,17 @@ LIMITATIONS
 * `dest` and `src` must not alias at all.
 * The base pointers for `dest` and `src` must be 64-byte aligned.
 """
-function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false; forcesingle = nothing) where {T}
+function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, x...; kw...) where {T}
+    return _memcpy!(dest, src, x...; kw...)
+end
+
+# Specialize `memcpy` for CachedArrays.
+# TODO: Figure out maximum number of threads for copying from PMM to PMM
+function memcpy!(dest::AbstractCachedArray{T}, src::AbstractArray{T}; kw...) where {T}
+    return _memcpy!(dest, src, isremote(dest); kw...)
+end
+
+function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false; forcesingle = nothing) where {T}
     # Do type check
     if !isbitstype(T)
         throw(ArgumentError("Can only memcpy isbits types."))
@@ -112,12 +123,14 @@ function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false
         copyto!(dest, src)
         return nothing
     end
-    #if !iszero(mod(convert(Int, dest_ptr), 64))
-    #    throw(ArgumentError("Destination is not aligned to a cache boundary!"))
-    #end
-    #if !iszero(mod(convert(Int, src_ptr), 64))
-    #    throw(ArgumentError("Source is not aligned to a cache boundary!"))
-    #end
+
+    if !iszero(mod(convert(Int, dest_ptr), 64))
+        throw(ArgumentError("Destination is not aligned to a cache boundary!"))
+    end
+
+    if !iszero(mod(convert(Int, src_ptr), 64))
+        throw(ArgumentError("Source is not aligned to a cache boundary!"))
+    end
 
     @static if THREADED_COPY
         # Determine if we're moving to the remote array.

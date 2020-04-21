@@ -1,12 +1,4 @@
 # Maintains Cache management.
-
-# Tunable Constants
-const SMALL_ALLOC_SIZE = -1   # Arrays with a small enough size aren't tracked
-
-# TODO: Maybe make one of these per thread to cut down on the number of locks that have
-# to be grabbed?
-#
-# TODO: Start to think about eviction policy.
 mutable struct CacheManager{C,P,Q}
     # Reference to local objects
     #
@@ -25,12 +17,26 @@ mutable struct CacheManager{C,P,Q}
     # All objects with remote memory.
     # Useful for defragmentation.
     remote_objects::Dict{UInt,WeakRef}
-
-    # The aggregate size of remote allocations.
     size_of_remote::Int
+
+    # local datastructures
     policy::C
     remote_heap::P
     local_heap::Q
+
+    ## local tunables
+
+    # We trigger a full GC before trying to evict items from the local cache.
+    # Try to take advantage of that GC to flush items from the cache until (1-FLUSHPERCENT)
+    # of the cache is free.
+    flushpercent::Float32
+
+    # Sometimes, doing a GC before flushing isn't helpful and just results in us spending
+    # too much time in the GC.
+    #
+    # TODO: In the future, I'd like to have this be auto-determined by whether GC actually
+    # freed anything, but for now set or disable it manually.
+    gc_before_evict::Bool
 end
 
 function CacheManager{T}(
@@ -67,10 +73,16 @@ function CacheManager{T}(
         policy,
         remote_heap,
         local_heap,
+        # tunables,
+        Float32(1),     # flushpercent
+        true,           # gc_before_evict
     )
 
     return manager
 end
+
+# Get the block for the given object.
+Block(M::CacheManager, id::Integer) = Block(first(M.local_objects[id]) - headersize())
 
 function Base.show(io::IO, M::CacheManager)
     println(io, "Cache Manager")
@@ -80,23 +92,23 @@ function Base.show(io::IO, M::CacheManager)
     println(io, "    $(remotesize(M) / 1E9) GB Remote Memory Used of $(M.remote_heap.len / 1E9)")
 end
 
-function Base.resize!(M::CacheManager, maxsize)
+function Base.resize!(M::CacheManager, maxsize; maxallocation = nothing)
     # Make sure there's nothing in the cache.
     if !isempty(M.local_objects)
         error("Can only resize empty caches!")
     end
 
     # Step 2 - replace the heap with the new size.
-    newheap = Heap(M.local_heap.allocator, maxsize)
+    newheap = Heap(M.local_heap.allocator, maxsize; maxallocation = maxallocation)
     M.local_heap = newheap
     return nothing
 end
 
-function resize_remote!(M::CacheManager, maxsize)
+function resize_remote!(M::CacheManager, maxsize; maxallocation = nothing)
     if !isempty(M.remote_objects)
         error("Can only resize empty caches!")
     end
-    newheap = Heap(M.remote_heap.allocator, maxsize)
+    newheap = Heap(M.remote_heap.allocator, maxsize; maxallocation = maxallocation)
     M.remote_heap = newheap
     return nothing
 end
@@ -147,6 +159,8 @@ end
 #####
 
 function registerlocal!(A, M::CacheManager = manager(A))
+    # This object MUST come from our managed heap.
+    @check M.local_heap.base <= pointer(A) < M.local_heap.base + M.local_heap.len
     @check !haskey(M.local_objects, id(A))
 
     # Add this array to the list of local objects.
@@ -235,13 +249,13 @@ function local_alloc(
     ptr = alloc(manager.local_heap, allocsize, id)
 
     # If allocation failed, try a GC
-    if isnothing(ptr)
+    if manager.gc_before_evict && isnothing(ptr)
         GC.gc(true)
         ptr = alloc(manager.local_heap, allocsize, id)
     end
 
     if isnothing(ptr)
-        doeviction!(manager, allocsize, id)
+        doeviction!(manager, allocsize)
         ptr = alloc(manager.local_heap, allocsize, id)
     end
 
@@ -268,20 +282,27 @@ local_free(manager::CacheManager, array::Array) = local_free(manager, pointer(ar
 local_free(manager::CacheManager, ptr::Ptr) = local_free(manager, convert(Ptr{Nothing}, ptr))
 local_free(manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.local_heap, ptr)
 
-function doeviction!(manager, allocsize, id)
+function doeviction!(manager, allocsize)
     stack = Priority{UInt}[]
+
+    # The eviction callback
+    cb = id -> managed_evict(manager, id)
 
     local block
     while true
         # Pop an item from the LRU
         push!(stack, fullpop!(manager.policy))
+        id = last(stack).val
 
-        # Get the pointer for this object.
-        ptr = first(manager.local_objects[last(stack).val])
-        block = Block(ptr - headersize())
+        # Get the heap Block for this object.
+        block = Block(manager, id)
 
         # Repeat until we get a block that will allow us to do this allocation.
         canallocfrom(manager.local_heap, block, allocsize) && break
+
+        if isempty(manager.policy)
+            display(stack)
+        end
     end
 
     # Put back all of the items in the LRU that we didn't use.
@@ -291,7 +312,17 @@ function doeviction!(manager, allocsize, id)
     end
 
     # Perform our managed eviction.
-    evictfrom!(manager.local_heap, block, allocsize; cb = id -> managed_evict(manager, id))
+    evictfrom!(manager.local_heap, block, allocsize; cb = cb)
+
+    # Now that we've guarenteed that we have a block available in our requested size,
+    # Clean up items from the cache.
+    target = ceil(Int, manager.local_heap.len * manager.flushpercent)
+
+    while localsize(manager) >= target
+        block = Block(manager, pop!(manager.policy))
+        evict!(manager.local_heap, block; cb = cb)
+    end
+
     return nothing
 end
 

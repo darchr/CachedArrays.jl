@@ -27,6 +27,8 @@ function LRU{T}(maxsize) where {T}
     )
 end
 
+Base.isempty(lru::LRU) = isempty(lru.heap)
+
 """
     pop!(C::LRU)
 

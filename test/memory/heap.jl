@@ -241,8 +241,9 @@ end
     ids = Int[]
     b0 = CachedArrays.Block(p0 - CachedArrays.headersize())
     CachedArrays.evictfrom!(heap, b0, 10000; cb = id -> push!(ids, id))
-    # This should fail the buddy check
-    @test !CachedArrays.check(heap)
+
+    # We've eviction should maintain the status of the cache.
+    @test CachedArrays.check(heap)
 
     p2 = CachedArrays.alloc(heap, 10000, 3)
     @test CachedArrays.check(heap)

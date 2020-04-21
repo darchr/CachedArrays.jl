@@ -18,6 +18,10 @@ binsize(i) = MIN_ALLOCATION * 2^(i-1)
 # Get the buddy block for a given header.
 # Ptr is a pointer to the block that `header` belongs to.
 function getbuddy(heap, block::Block)
+    # Is this the biggest block that we can allocate?
+    # If so, it doesn't have a buddy.
+    block.size == binsize(numbins(heap)) && return nothing
+
     base = baseaddress(heap)
     offset = address(block) - base
     shift = xor(block.size, offset)
@@ -40,6 +44,8 @@ mutable struct Heap{T}
 
     # Keep track of the pointers we have out in the wild.
     # This helps us deal with double-frees.
+    #
+    # TODO: Remove this.
     active_pointers::Set{Ptr{Nothing}}
 
     # The start to blocks, indexed by their size in the buddy system.
@@ -49,7 +55,7 @@ end
 baseaddress(heap::Heap) = convert(UInt, heap.base)
 numbins(heap::Heap) = length(heap.freelists)
 
-function Heap(allocator::T, sz) where {T}
+function Heap(allocator::T, sz; maxallocation = nothing) where {T}
     # Make an initial allocation of `sz`.
     base = allocate(allocator, sz)
 
@@ -73,7 +79,10 @@ function Heap(allocator::T, sz) where {T}
     # Tile the free space.
     size_left = sz
     ptr = base
-    currentsize = binsize(maxbin)
+
+    # Decide where to start based on the max-allocation size
+    currentsize = isnothing(maxallocation) ? binsize(maxbin) : binsize(getbin(maxallocation))
+
     while currentsize >= MIN_ALLOCATION
         # Check if we can allocate a chunk of this size.
         # If so, do it.
@@ -96,11 +105,11 @@ function Heap(allocator::T, sz) where {T}
 end
 
 # Implement a function to iterate through the whole heap.
-function Base.iterate(heap)
+function Base.iterate(heap::Heap)
     block = Block(heap.base)
     return (block, block)
 end
-function Base.iterate(heap, block::Block)
+function Base.iterate(heap::Heap, block::Block)
     if pointer(block) + block.size >= heap.base + heap.len
         return nothing
     end
@@ -203,7 +212,7 @@ function pop_freelist!(heap::Heap, bin)
     if isnull(block)
         # Could use recursion, but do this to avoid unnecessary stack growth.
         # Find the first non-null block
-        range= bin+1:numbins(heap)
+        range = bin+1:numbins(heap)
         i = findfirst(x -> !isnull(heap.freelists[x]), range)
         isnothing(i) && return nothing
         index = range[i]
@@ -302,49 +311,51 @@ function canallocfrom(heap::Heap, block::Block, sz)
     return address(block) - md + bsz <= baseaddress(heap) + heap.len
 end
 
+@inline function evict!(heap::Heap, block::Block; cb = donothing)
+    @check !isfree(block)
+
+    # Override the normal collection procedure by deleting the pointer to
+    # this block from the tracked pointers.
+    #
+    # This will ensure that even if this block is returned to the heap, it
+    # won't be merged with its buddy
+    delete!(heap.active_pointers, pointer(block) + headersize())
+
+    # Get the ID for the object that lives here, force free the block and
+    # return it.
+    cb(block.id)
+    block.free = true
+    return nothing
+end
+
 # Work our way up the
 function evictfrom!(heap::Heap, block::Block, sz; cb = donothing)
     bsz = binsize(getbin(sz + headersize()))
     # Find the base block for this future allocation.
     # We walk the heap through this block until we've freed everything.
     start = Block(address(block) - mod(address(block) - baseaddress(heap), bsz))
-
     stopaddress = address(start) + bsz
 
     # Can be equal if we're evicting a block that's the same size as the one we're trying
     # to put in.
+    @check address(start) >= baseaddress(heap)
     @check start.size <= bsz
 
-    working = start
-    while address(working) < stopaddress
+    current = start
+    while address(current) < stopaddress
         # If this block is free, remove it from the freelist.
-        if isfree(working)
-            remove!(heap, working)
-        else
-            # Override the normal collection procedure by deleting the pointer to
-            # this block from the tracked pointers.
-            #
-            # This will ensure that even if this block is returned to the heap, it
-            # won't be merged with its buddy
-            delete!(heap.active_pointers, pointer(working) + headersize())
-
-            # Get the ID for the object that lives here, force free the block and
-            # return it.
-            cb(working.id)
-            @check working.free == false
-            working.free = true
-        end
-
-        working = Block(address(working) + working.size)
+        # Otherwise, perfrom an eviction.
+        isfree(current) ? remove!(heap, current) : evict!(heap, current; cb = cb)
+        current = Block(address(current) + current.size)
     end
 
     # We should definitely end on a boundary.
-    @check address(working) == stopaddress
+    @check address(current) == stopaddress
 
     # Resize the start block and return it to the heap.
     start.size = bsz
     start.free = true
-    push_freelist!(heap, start)
+    putback!(heap, start)
     return nothing
 end
 

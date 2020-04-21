@@ -49,10 +49,8 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
         # Small arrays always live in the local memory, so we never have to worry about
         # a remote array being allocated and then being lost because the finalizer
         # is never called.
-        if !issmall(A)
-            finalizer(cleanup, A)
-            registerlocal!(A)
-        end
+        finalizer(cleanup, A)
+        registerlocal!(A)
         return A
     end
 end
@@ -71,8 +69,6 @@ manager(x::AbstractCachedArray) = x.manager
 
 # Finalizer
 function cleanup(A::CachedArray)
-    issmall(A) && return nothing
-
     # Clean up local storage on the manager
     if islocal(A)
         local_free(manager(A), _array(A))
@@ -112,12 +108,10 @@ isparent(A::CachedArray) = (_array(A) === parent(A))
 hasparent(A::CachedArray) = !isnothing(parent(A))
 
 islocal(A::CachedArray) = isnothing(parent(A)) || !isparent(A)
+isremote(A::CachedArray) = !islocal(A)
 
 isdirty(A::CachedArray) = A.dirty
 isclean(A::CachedArray) = !isdirty(A)
-
-# Check for small sized arrays
-issmall(A::AbstractCachedArray) = sizeof(A) <= SMALL_ALLOC_SIZE
 
 #####
 ##### Array Interface
@@ -166,29 +160,30 @@ end
 ##### API for fetching and storing the array.
 #####
 
+# Prefetch `A` into local memory.
+# If `A` is already local, don't do any updates, including anything with the `dirty` flag.
+# If `A` is remote, fetch it and set the dirty flag.
 function prefetch!(A::CachedArray; dirty = true)
-    (issmall(A) || islocal(A)) && return nothing
+    islocal(A) && return nothing
 
     # Need to allocate a local array.
     #localstorage = similar(_array(A))
     localstorage = local_alloc(manager(A), typeof(_array(A)), size(_array(A)), id(A))
 
     # TODO: Fast copy using AVX
-    #copyto!(localstorage, _array(A))
     memcpy!(localstorage, _array(A))
-    registerlocal!(A)
 
     # Update the CachedArray
     A.parent = _array(A)
     A.array = localstorage
 
-    # Be pessimistic with the `dirty` flag.
-    # This can be cleared by later uses, but shouldn't be the default.
+    # Register with the cache manager
+    registerlocal!(A)
     A.dirty = dirty
 end
 
 function evict!(A::CachedArray)
-    (issmall(A) || isparent(A)) && return nothing
+    isparent(A) && return nothing
 
     # If this array does not have a parent and it's being evicted rather than freed,
     # Then we have to create a parent array for it.

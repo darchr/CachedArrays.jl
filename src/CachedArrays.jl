@@ -32,7 +32,6 @@ donothing(x...) = nothing
 
 # Bootstrap Utilities
 include("memkind.jl")
-include("memcpy.jl")
 
 include("memory/allocators.jl")
 include("memory/block.jl")
@@ -48,6 +47,7 @@ include("cache/cache.jl")
 include("array/array.jl")
 include("array/locked.jl")
 
+include("memcpy.jl")
 include("lib.jl")
 
 # Global manager for the set of CachedArrays.

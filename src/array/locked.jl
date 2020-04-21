@@ -79,6 +79,8 @@ end
 # For functions that globally modify an LockedCachedArray,
 # we call `unlock` on the array.
 # This automatically marks the array as dirty.
+#
+# Insert prefetches for each `copyto!` implementation
 function Base.copyto!(
         dest::LockedCachedArray,
         desto::Integer,
@@ -86,14 +88,17 @@ function Base.copyto!(
         srco::Integer,
         N::Integer
     )
+    prefetch!(dest)
     return copyto!(unlock(dest), desto, src, srco, N)
 end
 
 function Base.copyto!(dest::LockedCachedArray, src::AbstractArray)
+    prefetch!(dest)
     return lock(copyto!(unlock(dest), src))
 end
 
 function Base.copyto!(dest::LockedCachedArray, bc::Broadcast.Broadcasted)
+    prefetch!(dest)
     return lock(copyto!(unlock(dest), bc))
 end
 
@@ -108,6 +113,7 @@ MacroTools.@forward LockedCachedArray.array (
     isparent,
     hasparent,
     islocal,
+    isremote,
     isdirty,
     isclean,
     evict!,
