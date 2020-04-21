@@ -16,6 +16,10 @@ using MacroTools
 const DEBUG = get(ENV, "JULIA_CACHEDARRAYS_DEBUG", true)
 const THREADED_COPY = true
 
+# Flag to indicate if we're in 2LM.
+# If we are, configure the system to error if we ever try to allocate remote memory.
+const IS_2LM = get(ENV, "JULIA_IS_2LM", false)
+
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
 @static if DEBUG
@@ -54,6 +58,7 @@ include("lib.jl")
 # It's important to keep this concretely typed.
 const ManagerType = CacheManager{LRU{UInt},Heap{MemKindAllocator},Heap{AlignedAllocator}}
 const GlobalManager = Ref{ManagerType}()
+
 
 function __init__()
     # Create the global manager.

@@ -292,6 +292,16 @@ function free(heap::Heap, ptr::Ptr{Nothing})
     return nothing
 end
 
+###
+### 2LM Hack
+###
+
+@static if IS_2LM
+    function alloc(heap::Heap{MemKindAllocator}, bytes::Integer, id = nothing)
+        error("Trying to allocate from remote heap in 2LM!")
+    end
+end # @static if
+
 #####
 ##### Utilities for eviction
 #####

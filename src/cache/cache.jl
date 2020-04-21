@@ -45,10 +45,14 @@ function CacheManager{T}(
         remotesize = 1_000_000_000
     ) where {T}
 
-    # Allocate the backing memory
-    #
-    # For now, pass 0 - which essentially allows unlimited memory
-    kind = MemKind.create_pmem(path, 0)
+    # If we're in 2LM, pass a nullptr.
+    # MemKindAllocator gets swapped to something that throws an error if called.
+    if IS_2LM
+        kind = MemKind.Kind(Ptr{Nothing}(0))
+    else
+        # For now, pass 0 - which essentially allows unlimited memory
+        kind = MemKind.create_pmem(path, 0)
+    end
 
     local_objects = Dict{UInt,Tuple{Ptr{Nothing},WeakRef}}()
     size_of_local = 0
