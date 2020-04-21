@@ -18,7 +18,9 @@ const THREADED_COPY = true
 
 # Flag to indicate if we're in 2LM.
 # If we are, configure the system to error if we ever try to allocate remote memory.
-const IS_2LM = get(ENV, "JULIA_IS_2LM", false)
+_boolparse(x::Bool) = x
+_boolparse(x::String) = parse(Bool, x)
+const IS_2LM = _boolparse(get(ENV, "JULIA_IS_2LM", false))
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
@@ -63,7 +65,7 @@ const GlobalManager = Ref{ManagerType}()
 function __init__()
     # Create the global manager.
     path = get(ENV, "JULIA_PMEM_PATH", @__DIR__)
-    if path == @__DIR__
+    if (path == @__DIR__) && !IS_2LM
         @warn """
             Please define the environment variable "JULIA_PMEM_PATH" to point to
             the location where the PMM file should be located.

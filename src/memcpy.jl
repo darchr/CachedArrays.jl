@@ -160,11 +160,13 @@ end
 
 const AVX512BYTES = 64
 
+# TODO: THe backwards direction doesn't actually work yet ...
+# I was trying to be too clever then bailed.
 _adjust(::typeof(+), x::Ptr{UInt8}, len) = x
-_adjust(::typeof(-), x::Ptr{UInt8}, len) = x + len
+#_adjust(::typeof(-), x::Ptr{UInt8}, len) = x + len
 
 inv(::typeof(+)) = -
-inv(::typeof(-)) = +
+#inv(::typeof(-)) = +
 
 """
     unsafe_memcpy!(f, dest::Ptr{UInt8}, src::Ptr{UInt8}, len)

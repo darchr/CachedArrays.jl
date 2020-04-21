@@ -16,7 +16,7 @@ end
 # However, we extend the `alloc` method for the heap to throw an error in 2LM.
 @static if IS_2LM
     allocate(A::MemKindAllocator, sz) = allocate(AlignedAllocator(), sz)
-    free(A::MemKindAllocator, ptr::Ptr{Nothing}) = free(AlignedAllocator(), sz)
+    free(A::MemKindAllocator, ptr::Ptr{Nothing}) = free(AlignedAllocator(), ptr)
 else
     allocate(A::MemKindAllocator, sz) = MemKind.malloc(A.kind, sz)
     free(A::MemKindAllocator, ptr::Ptr{Nothing}) = MemKind.free(A.kind, ptr)

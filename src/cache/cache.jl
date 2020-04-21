@@ -213,7 +213,6 @@ end
 #####
 
 function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
-
     allocsize = sizeof(T) * prod(dims)
     ptr = alloc(manager.remote_heap, allocsize)
 
