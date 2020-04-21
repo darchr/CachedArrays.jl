@@ -24,7 +24,7 @@ const IS_2LM = get(ENV, "JULIA_IS_2LM", false)
 # Otherwise, it will simply forward to `@assert`.
 @static if DEBUG
     macro check(ex...)
-        return :(@assert($(esc.(ex)...)))
+        return :(@assert($(esc(ex)...)))
     end
 else
     macro check(ex...)
