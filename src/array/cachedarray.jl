@@ -7,12 +7,10 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     array::Array{T,N}
 
     # Pointer to the remote the far memory location of the array.
-    # This could be null if the remote hasn't been allocated.
+    # This could be nothing if the remote hasn't been allocated.
     #
     # This array `A` is in remote storate if `pointer(A) == A.remote_ptr`
     parent::Union{Nothing,Array{T,N}}
-
-    # Hints regarding storage
     manager::CacheManager
 
     # Should be conservative with this flag and always default to `true`.
@@ -57,7 +55,7 @@ end
 
 function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) where {T,N,C}
     id = getid(manager)
-    _x = local_alloc(manager, typeof(x), size(x), id)
+    _x = unsafe_local_alloc(manager, typeof(x), size(x), id)
     copyto!(_x, x)
     return CachedArray{T,N,C}(_x, id, parent, manager)
 end
@@ -89,7 +87,7 @@ function CachedArray{T}(
     ) where {T,N,C}
 
     id = getid(manager)
-    array = local_alloc(manager, Array{T,N}, dims, id)
+    array = unsafe_local_alloc(manager, Array{T,N}, dims, id)
     # Default the `remote_ptr` to a null ptr
     A = CachedArray{T,N,C}(
         array,
@@ -164,11 +162,15 @@ end
 # If `A` is already local, don't do any updates, including anything with the `dirty` flag.
 # If `A` is remote, fetch it and set the dirty flag.
 function prefetch!(A::CachedArray; dirty = true)
-    islocal(A) && return nothing
+    # If already local, update position in the LRU
+    if islocal(A)
+        updatelocal!(A)
+        return nothing
+    end
 
     # Need to allocate a local array.
     #localstorage = similar(_array(A))
-    localstorage = local_alloc(manager(A), typeof(_array(A)), size(_array(A)), id(A))
+    localstorage = unsafe_local_alloc(manager(A), typeof(_array(A)), size(_array(A)), id(A))
 
     # TODO: Fast copy using AVX
     memcpy!(localstorage, _array(A))
@@ -183,7 +185,7 @@ function prefetch!(A::CachedArray; dirty = true)
 end
 
 function evict!(A::CachedArray)
-    isparent(A) && return nothing
+    isremote(A) && return nothing
 
     # If this array does not have a parent and it's being evicted rather than freed,
     # Then we have to create a parent array for it.
@@ -205,7 +207,6 @@ function move_to_remote!(A::CachedArray)
     hp = hasparent(A)
     dirty = isdirty(A)
     if !hp
-        #A.parent = remote_alloc(typeof(_array(A)), A.manager, size(A))
         A.parent = remote_alloc(manager(A), typeof(_array(A)), size(A))
     end
 
@@ -220,5 +221,4 @@ function move_to_remote!(A::CachedArray)
 
     return nothing
 end
-
 

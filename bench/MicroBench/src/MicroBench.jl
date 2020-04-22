@@ -35,6 +35,7 @@ const TOTALSIZE = DEBUG ? 20_000_000_000 : parse(Int, replace(ENV["JULIA_MICROBE
 
 # More Prefetches
 #CachedArrays.@prefetch LinearAlgebra.mul!(Y::AbstractCachedArray, A::AbstractCachedArray, B::AbstractCachedArray)
+
 # TODO: Handle unlocking in the @prefetch macro
 maybesuper(x) = CachedArrays.maybesuper(x)
 function LinearAlgebra.mul!(Y::AbstractCachedArray, A::AbstractCachedArray, B::AbstractCachedArray)
@@ -42,7 +43,12 @@ function LinearAlgebra.mul!(Y::AbstractCachedArray, A::AbstractCachedArray, B::A
     CachedArrays.prefetch!(A)
     CachedArrays.prefetch!(B)
     _Y = CachedArrays.unlock(Y)
-    return Base.invoke(LinearAlgebra.mul!, Tuple{maybesuper(Y),maybesuper(A),maybesuper(B)}, Y,A,B)
+    ret = Base.invoke(LinearAlgebra.mul!, Tuple{maybesuper(Y),maybesuper(A),maybesuper(B)}, Y,A,B)
+
+    # Clean up
+    CachedArrays.evict!(A)
+    CachedArrays.evict!(B)
+    return ret
 end
 
 include("counters.jl")
@@ -54,7 +60,7 @@ function setup()
     # if in 2LM mode, all of the temporary arrays should go into local memory
     if IS_2LM
         # Round up for headroom
-        localsize = round(Int, TOTALSIZE * 1.1)
+        localsize = round(Int, TOTALSIZE * 1.5)
         remotesize = 4096
     # Size local mamory to be a little smaller than the DRAM cache to allow for other
     # program activities that don't belong to our heap.

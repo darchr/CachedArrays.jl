@@ -33,12 +33,13 @@ else
     end
 end
 
+# This turns out to be surpritingly useful ...
 donothing(x...) = nothing
 
 # Bootstrap Utilities
 include("memkind.jl")
+include("allocators.jl")
 
-include("memory/allocators.jl")
 include("memory/block.jl")
 include("memory/heap.jl")
 
@@ -46,18 +47,19 @@ include("memory/heap.jl")
 include("policy/lru.jl")
 
 # Implementation of the arrays and cache manager
-include("cache/cache.jl")
+include("manager.jl")
 
 # Array Implementstions
-include("array/array.jl")
+include("array/cachedarray.jl")
 include("array/locked.jl")
 
+# Fast "memcpy"
 include("memcpy.jl")
 include("lib.jl")
 
 # Global manager for the set of CachedArrays.
 # It's important to keep this concretely typed.
-const ManagerType = CacheManager{LRU{UInt},Heap{MemKindAllocator},Heap{AlignedAllocator}}
+const ManagerType = CacheManager{LRU{UInt},BuddyHeap{MemKindAllocator},BuddyHeap{AlignedAllocator}}
 const GlobalManager = Ref{ManagerType}()
 
 

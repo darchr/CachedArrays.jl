@@ -3,7 +3,7 @@ using Test
 using Random
 using BenchmarkTools
 
-include("memory/heap.jl")
+include("memory/buddyheap.jl")
 
 include("memkind.jl")
 include("memcpy.jl")

@@ -35,7 +35,7 @@ function getbuddy(heap, block::Block)
     end
 end
 
-mutable struct Heap{T}
+mutable struct BuddyHeap{T}
     allocator::T
 
     # The base pointer for the heap we're managing.
@@ -52,10 +52,10 @@ mutable struct Heap{T}
     freelists::Vector{Block}
 end
 
-baseaddress(heap::Heap) = convert(UInt, heap.base)
-numbins(heap::Heap) = length(heap.freelists)
+baseaddress(heap::BuddyHeap) = convert(UInt, heap.base)
+numbins(heap::BuddyHeap) = length(heap.freelists)
 
-function Heap(allocator::T, sz; maxallocation = nothing) where {T}
+function BuddyHeap(allocator::T, sz; maxallocation = nothing) where {T}
     # Make an initial allocation of `sz`.
     base = allocate(allocator, sz)
 
@@ -64,7 +64,7 @@ function Heap(allocator::T, sz; maxallocation = nothing) where {T}
     maxbin = getbin(sz)
     freelists = [Block() for _ in 1:maxbin]
 
-    heap = Heap{T}(
+    heap = BuddyHeap{T}(
         allocator,
         base,
         sz,
@@ -105,11 +105,11 @@ function Heap(allocator::T, sz; maxallocation = nothing) where {T}
 end
 
 # Implement a function to iterate through the whole heap.
-function Base.iterate(heap::Heap)
+function Base.iterate(heap::BuddyHeap)
     block = Block(heap.base)
     return (block, block)
 end
-function Base.iterate(heap::Heap, block::Block)
+function Base.iterate(heap::BuddyHeap, block::Block)
     if pointer(block) + block.size >= heap.base + heap.len
         return nothing
     end
@@ -117,7 +117,7 @@ function Base.iterate(heap::Heap, block::Block)
     return (block, block)
 end
 
-function slowlength(heap::Heap)
+function slowlength(heap::BuddyHeap)
     count = 0
     for block in heap
         count += 1
@@ -126,7 +126,7 @@ function slowlength(heap::Heap)
 end
 
 # Push an item onto the free list.
-function push_freelist!(heap::Heap, block::Block)
+function push_freelist!(heap::BuddyHeap, block::Block)
     # Get the header for this block - check what bin it should be in.
     @check ispow2(block.size)
     @check isfree(block)
@@ -170,7 +170,7 @@ function remove!(heap, block::Block)
     return nothing
 end
 
-function split!(heap::Heap, block::Block)
+function split!(heap::BuddyHeap, block::Block)
     @check block.free
 
     # Split a block into two blocks half the size.
@@ -200,7 +200,7 @@ end
 
 # Pop a block off the free list for the given bin.
 # If no blocks are available, will recurse one level up and split.
-function pop_freelist!(heap::Heap, bin)
+function pop_freelist!(heap::BuddyHeap, bin)
     block = heap.freelists[bin]
 
     # If we've reached the top of the chain and we have no blocks available,
@@ -235,7 +235,7 @@ function pop_freelist!(heap::Heap, bin)
     return block
 end
 
-function putback!(heap::Heap, block::Block)
+function putback!(heap::BuddyHeap, block::Block)
     @check isfree(block)
 
     # Check if the buddy for this block is free.
@@ -260,7 +260,7 @@ end
 ##### High Level API
 #####
 
-function alloc(heap::Heap, bytes::Integer, id = nothing)
+function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
     iszero(bytes) && return nothing
 
     # Determine what bin this belongs to.
@@ -279,8 +279,8 @@ function alloc(heap::Heap, bytes::Integer, id = nothing)
     end
 end
 
-free(heap::Heap, ptr::Ptr) = free(heap, convert(Ptr{Nothing}, ptr))
-function free(heap::Heap, ptr::Ptr{Nothing})
+free(heap::BuddyHeap, ptr::Ptr) = free(heap, convert(Ptr{Nothing}, ptr))
+function free(heap::BuddyHeap, ptr::Ptr{Nothing})
     !in(ptr, heap.active_pointers) && return nothing
 
     # Get the block from the pointer
@@ -297,7 +297,7 @@ end
 ###
 
 @static if IS_2LM
-    function alloc(heap::Heap{MemKindAllocator}, bytes::Integer, id = nothing)
+    function alloc(heap::BuddyHeap{MemKindAllocator}, bytes::Integer, id = nothing)
         error("Trying to allocate from remote heap in 2LM!")
     end
 end # @static if
@@ -308,7 +308,7 @@ end # @static if
 
 # Return `true` if we will be able to allocate a block of size `sz` by successively
 # freeing larger buddy blocks starting at `block`.
-function canallocfrom(heap::Heap, block::Block, sz)
+function canallocfrom(heap::BuddyHeap, block::Block, sz)
     bin = getbin(sz + headersize())
     bin > numbins(heap) && return false
     bsz = binsize(bin)
@@ -321,7 +321,7 @@ function canallocfrom(heap::Heap, block::Block, sz)
     return address(block) - md + bsz <= baseaddress(heap) + heap.len
 end
 
-@inline function evict!(heap::Heap, block::Block; cb = donothing)
+@inline function evict!(heap::BuddyHeap, block::Block; cb = donothing)
     @check !isfree(block)
 
     # Override the normal collection procedure by deleting the pointer to
@@ -339,7 +339,7 @@ end
 end
 
 # Work our way up the
-function evictfrom!(heap::Heap, block::Block, sz; cb = donothing)
+function evictfrom!(heap::BuddyHeap, block::Block, sz; cb = donothing)
     bsz = binsize(getbin(sz + headersize()))
     # Find the base block for this future allocation.
     # We walk the heap through this block until we've freed everything.
@@ -373,7 +373,7 @@ end
 ##### Utility Checking Functions.
 #####
 
-function freelist_length(heap::Heap, bin)
+function freelist_length(heap::BuddyHeap, bin)
     block = heap.freelists[bin]
     count = 0
     while !isnull(block)
@@ -383,7 +383,7 @@ function freelist_length(heap::Heap, bin)
     return count
 end
 
-function zerocheck(heap::Heap, verbose = false)
+function zerocheck(heap::BuddyHeap, verbose = false)
     for (i, block) in enumerate(heap)
         if verbose
             println("Block: $(pointer(block))")
@@ -402,7 +402,7 @@ end
 # Walk through the heap.
 # If a block is free, its buddy should NOT be free.
 # If they are both free, then they should have been cleaned up.
-function buddycheck(heap::Heap)
+function buddycheck(heap::BuddyHeap)
     for block in heap
         if isfree(block)
             buddy = getbuddy(heap, block)
@@ -414,7 +414,7 @@ function buddycheck(heap::Heap)
     return true
 end
 
-function countcheck(heap::Heap)
+function countcheck(heap::BuddyHeap)
     # Count the length of each free list, then walk the heap, counting the number of free
     # blocks in each bin.
     #
@@ -439,7 +439,7 @@ function countcheck(heap::Heap)
     return passed
 end
 
-function sizecheck(heap::Heap)
+function sizecheck(heap::BuddyHeap)
     sz = 0
     for block in heap
         sz += block.size
@@ -447,22 +447,22 @@ function sizecheck(heap::Heap)
     return sz == heap.len
 end
 
-function check(heap::Heap)
+function check(heap::BuddyHeap)
     zerocheck(heap)
 
     passed = true
     if !buddycheck(heap)
-        printstyled(stdout, "Heap Failed Buddy Check\n"; color = :red)
+        printstyled(stdout, "BuddyHeap Failed Buddy Check\n"; color = :red)
         passed = false
     end
 
     if !countcheck(heap)
-        printstyled(stdout, "Heap Failed Count Check\n"; color = :red)
+        printstyled(stdout, "BuddyHeap Failed Count Check\n"; color = :red)
         passed = false
     end
 
     if !sizecheck(heap)
-        printstyled(stdout, "Heap Failed Size Check\n"; color = :red)
+        printstyled(stdout, "BuddyHeap Failed Size Check\n"; color = :red)
         passed = false
     end
 

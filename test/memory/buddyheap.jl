@@ -1,4 +1,4 @@
-@testset "Testing Custom Heap Manager" begin
+@testset "Testing Custom BuddyHeap Manager" begin
     # Test "Block"
     #
     # Make a 64 byte vector that our "block" will modify
@@ -44,7 +44,7 @@
 
     # Start with a small heap for our experiments.
     len = 2^20
-    heap = CachedArrays.Heap(allocator, len)
+    heap = CachedArrays.BuddyHeap(allocator, len)
 
     # We should have 1 bin that is 2^20 bytes large.
     num_bins = length(heap.freelists)
@@ -109,7 +109,7 @@
 
     # Try a pretty gnalry allocation test.
     len = 2^20
-    heap = CachedArrays.Heap(allocator, len)
+    heap = CachedArrays.BuddyHeap(allocator, len)
     @show CachedArrays.slowlength(heap)
 
     numtests = 10000
@@ -179,7 +179,7 @@ end
     #   8192       8192       8192       8192
     # 4096 4096  4096 4096  4096 4096  4096 4096
     allocator = CachedArrays.AlignedAllocator()
-    heap = CachedArrays.Heap(allocator, 4096 * 8)
+    heap = CachedArrays.BuddyHeap(allocator, 4096 * 8)
 
     # Allocate a 4096 byte chunk and a 8192 byte chunk.
     function doallocation(heap)

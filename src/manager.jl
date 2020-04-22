@@ -64,8 +64,8 @@ function CacheManager{T}(
     # Initialize the cache
     policy = LRU{UInt}(localsize)
 
-    remote_heap = Heap(MemKindAllocator(kind), remotesize)
-    local_heap = Heap(AlignedAllocator(), localsize)
+    remote_heap = BuddyHeap(MemKindAllocator(kind), remotesize)
+    local_heap = BuddyHeap(AlignedAllocator(), localsize)
 
     # Construct the manager.
     manager = CacheManager{T,typeof(remote_heap),typeof(local_heap)}(
@@ -103,7 +103,7 @@ function Base.resize!(M::CacheManager, maxsize; maxallocation = nothing)
     end
 
     # Step 2 - replace the heap with the new size.
-    newheap = Heap(M.local_heap.allocator, maxsize; maxallocation = maxallocation)
+    newheap = BuddyHeap(M.local_heap.allocator, maxsize; maxallocation = maxallocation)
     M.local_heap = newheap
     return nothing
 end
@@ -112,7 +112,7 @@ function resize_remote!(M::CacheManager, maxsize; maxallocation = nothing)
     if !isempty(M.remote_objects)
         error("Can only resize empty caches!")
     end
-    newheap = Heap(M.remote_heap.allocator, maxsize; maxallocation = maxallocation)
+    newheap = BuddyHeap(M.remote_heap.allocator, maxsize; maxallocation = maxallocation)
     M.remote_heap = newheap
     return nothing
 end
@@ -175,9 +175,7 @@ function registerlocal!(A, M::CacheManager = manager(A))
     return nothing
 end
 
-function updatelocal!(A, M::CacheManager = manager(A))
-    update!(M.policy, id(A), sizeof(A))
-end
+updatelocal!(A, M::CacheManager = manager(A)) = update!(M.policy, id(A))
 
 function freelocal!(A, M::CacheManager = manager(A))
     _id = id(A)
@@ -213,6 +211,20 @@ end
 #####
 
 function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
+    A = unsafe_remote_alloc(manager, Array{T,N}, dims)
+    finalizer(A) do x
+        free(manager.remote_heap, convert(Ptr{Nothing}, pointer(x)))
+    end
+    return A
+end
+
+# Remote alloc without a finalizer
+function unsafe_remote_alloc(
+        manager::CacheManager,
+        ::Type{Array{T,N}},
+        dims::NTuple{N,Int}
+    ) where {T,N}
+
     allocsize = sizeof(T) * prod(dims)
     ptr = alloc(manager.remote_heap, allocsize)
 
@@ -222,11 +234,7 @@ function remote_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,
         ptr = alloc(manager.remote_heap, allocsize)
     end
 
-    A = unsafe_wrap(Array, convert(Ptr{T}, ptr), dims; own = false)
-    finalizer(A) do x
-        free(manager.remote_heap, convert(Ptr{Nothing}, pointer(x)))
-    end
-    return A
+    return unsafe_wrap(Array, convert(Ptr{T}, ptr), dims; own = false)
 end
 
 #####
@@ -241,7 +249,15 @@ end
 #
 #         Do that free operation.
 
-function local_alloc(
+function local_alloc(manager::CacheManager, ::Type{Array{T,N}}, dims::NTuple{N,Int}) where {T,N}
+    A = unsafe_local_alloc(manager, Array{T,N}, dims)
+    finalizer(A) do x
+        free(manager.local_heap, convert(Ptr{Nothing}, pointer(x)))
+    end
+    return A
+end
+
+function unsafe_local_alloc(
         manager::CacheManager,
         ::Type{Array{T,N}},
         dims::NTuple{N,Int},
@@ -268,16 +284,6 @@ function local_alloc(
 
     ptr = convert(Ptr{T}, ptr)
     A = unsafe_wrap(Array, ptr, dims; own = false)
-
-    # Don't attach a finalizer.
-    # Cleanup MUST be managed by any object that calls this routine.
-    # This is to ensure that data that is evicted by the heap is immediately available for
-    # reuse.
-    #
-    # finalizer(A) do x
-    #     free(manager.local_heap, convert(Ptr{Nothing}, pointer(x)))
-    # end
-
     return A
 end
 
@@ -286,7 +292,9 @@ local_free(manager::CacheManager, ptr::Ptr) = local_free(manager, convert(Ptr{No
 local_free(manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.local_heap, ptr)
 
 function doeviction!(manager, allocsize)
-    stack = Priority{UInt}[]
+    # The full storage storage types for policies may contain
+    # extra metadata.
+    stack = fulleltype(manager.policy)[]
 
     # The eviction callback
     cb = id -> managed_evict(manager, id)

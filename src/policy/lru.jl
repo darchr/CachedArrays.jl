@@ -3,18 +3,16 @@ struct Priority{T}
     val::T
 end
 
-getsize(P::Priority) = P.sz
 Base.isless(a::P, b::P) where {P <: Priority} = isless(a.priority, b.priority)
 Base.:(==)(a::P, b::P) where {P <: Priority} = a.priority == b.priority
 Base.hash(a::Priority, h::UInt = UInt(0x0)) = hash(a.priority, h)
 
+
 # LRU Policy for eviction.
 mutable struct LRU{T}
     count::Int
-
     # Wrap around a mutable binary heap.
     heap::DataStructures.MutableBinaryHeap{Priority{T}, DataStructures.LessThan}
-
     # Map items to their handles
     handles::Dict{T,Int}
 end
@@ -26,6 +24,9 @@ function LRU{T}(maxsize) where {T}
         Dict{T,Int}(),
     )
 end
+
+Base.eltype(::LRU{T}) where {T} = T
+fulleltype(::LRU{T}) where {T} = Priority{T}
 
 Base.isempty(lru::LRU) = isempty(lru.heap)
 
@@ -69,9 +70,9 @@ end
 
 Update `v` to the bottom of the heap.
 """
-function update!(C::LRU, v, sz)
+function update!(C::LRU, v)
     delete!(C.heap, C.handles[v])
-    C.handles[v] = push!(C.heap, Priority(C.count, v, sz))
+    C.handles[v] = push!(C.heap, Priority(C.count, v))
     C.count += 1
 end
 
