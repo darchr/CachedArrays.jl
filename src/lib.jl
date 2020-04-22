@@ -15,6 +15,7 @@ _esc(x) = :($(esc(x)))
 function prefetch_impl(expr::Expr)
     def = splitdef(expr)
     names = first.(MacroTools.splitarg.(def[:args]))
+    def[:name] = esc(def[:name])
     def[:args] = map(_esc, def[:args])
 
     prefetch = map(names) do arg

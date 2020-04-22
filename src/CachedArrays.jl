@@ -1,6 +1,6 @@
 module CachedArrays
 
-export CachedArray, LockedCachedArray
+export CachedArray, LockedCachedArray, AbstractCachedArray
 
 # stdlib
 import Dates
@@ -8,7 +8,6 @@ import Dates
 # Dependencies
 import DataStructures
 import SIMD
-#import ThreadPools
 using MacroTools
 
 # Control whether asserts are active

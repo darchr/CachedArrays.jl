@@ -35,20 +35,26 @@ end
 # To element-wise accumulation.
 function sequential_accumulation(arrays::Vector; iterations = 1)
     # Create a similar array to the input.
-    s = similar(first(arrays))
+    s = CachedArrays.unlock(similar(first(arrays)))
     s .= zero(eltype(s))
 
     # Now, accumulate across all the arrays.
     for a in arrays
-        s .+= a
+        Threads.@threads for i in eachindex(a)
+            s[i] = s[i] + a[i]
+        end
     end
     return s
 end
 
 # This dirties the entire cache
-function sequential_zero(arrays::Vector, iterations = 1)
-    for a in arrays
-        a .= zero(eltype(a))
+function sequential_zero(arrays::Vector; iterations = 1)
+    for A in arrays
+        CachedArrays.prefetch!(A)
+        _A = CachedArrays.unlock(A)
+        Threads.@threads for i in eachindex(_A)
+            _A[i] = zero(eltype(A))
+        end
     end
     return nothing
 end

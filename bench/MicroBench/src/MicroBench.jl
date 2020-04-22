@@ -1,17 +1,27 @@
+__precompile__(false)
 module MicroBench
 
 # The main reason for this module's existence
 using CachedArrays
 
 # stdlib
+using Dates
+using LinearAlgebra
 using Random
+using Statistics
 
 # "internal" dependencies
 using MaxLFSR
 using KernelBenchmarks  # for fast initialization of arrays.
+using SystemSnoop
+using CounterTools
+using MattDaemon
+using ExperimentsDB
 
 # external deps
+using DataStructures
 using ProgressMeter
+using StructArrays
 
 # debug mode enables much smaller kernels that don't exceed the size of the DRAM
 const DEBUG = false
@@ -23,6 +33,19 @@ const IS_1LM = !IS_2LM
 const ARRAYSIZE = DEBUG ? 1_000_000_000 : parse(Int, replace(ENV["JULIA_MICROBENCH_ARRAYSIZE"], "_"=>""))
 const TOTALSIZE = DEBUG ? 20_000_000_000 : parse(Int, replace(ENV["JULIA_MICROBENCH_TOTALSIZE"], "_"=>""))
 
+# More Prefetches
+#CachedArrays.@prefetch LinearAlgebra.mul!(Y::AbstractCachedArray, A::AbstractCachedArray, B::AbstractCachedArray)
+# TODO: Handle unlocking in the @prefetch macro
+maybesuper(x) = CachedArrays.maybesuper(x)
+function LinearAlgebra.mul!(Y::AbstractCachedArray, A::AbstractCachedArray, B::AbstractCachedArray)
+    CachedArrays.prefetch!(Y)
+    CachedArrays.prefetch!(A)
+    CachedArrays.prefetch!(B)
+    _Y = CachedArrays.unlock(Y)
+    return Base.invoke(LinearAlgebra.mul!, Tuple{maybesuper(Y),maybesuper(A),maybesuper(B)}, Y,A,B)
+end
+
+include("counters.jl")
 include("1d/top_1d.jl")
 include("2d/top_2d.jl")
 

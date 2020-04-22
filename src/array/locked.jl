@@ -31,8 +31,8 @@ end
 Base.lock(x::CachedArray) = LockedCachedArray(x)
 Base.lock(x::LockedCachedArray) = x
 
-unlock(x::CachedArray) = x
-function unlock(x::LockedCachedArray)
+Base.unlock(x::CachedArray) = x
+function Base.unlock(x::LockedCachedArray)
     x.array.dirty = true
     return x.array
 end
@@ -98,6 +98,12 @@ function Base.copyto!(dest::LockedCachedArray, src::AbstractArray)
 end
 
 function Base.copyto!(dest::LockedCachedArray, bc::Broadcast.Broadcasted)
+    prefetch!(dest)
+    return lock(copyto!(unlock(dest), bc))
+end
+
+# Ambiguity resolution
+function Base.copyto!(dest::LockedCachedArray, bc::Broadcast.Broadcasted{<:Broadcast.AbstractArrayStyle{0}})
     prefetch!(dest)
     return lock(copyto!(unlock(dest), bc))
 end
