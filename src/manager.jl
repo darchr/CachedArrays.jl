@@ -89,6 +89,14 @@ end
 Block(M::CacheManager, id::Integer) = first(M.local_objects[id])
 Base.get(M::CacheManager, id::Integer) = last(M.local_objects[id]).value
 
+# Mark as Dirty
+# Add a bit of indirection so in the future, we can notify the manager that a block gets
+# transitioned to dirty
+setdirty!(A, flag::Bool = true) = setdirty!(A, manager(A), flag)
+setdirty!(A, M::CacheManager, flag::Bool = true) = (Block(A).dirty = flag)
+
+isdirty(A) = Block(A).dirty
+
 function Base.show(io::IO, M::CacheManager)
     println(io, "Cache Manager")
     println(io, "    $(length(M.local_objects)) Local Objects")
@@ -127,37 +135,14 @@ function getid(manager::CacheManager)
     return id
 end
 
-id(x) = error("Implement `id` for $(typeof(x))")
+# Fallback Definitions
+id(x) = Block(x).id
+pool(x) = Block(x).pool
+
 manager(x) = error("Implement `manager` for $(typeof(x))")
 
 localsize(manager::CacheManager) = manager.size_of_local
 remotesize(manager::CacheManager) = manager.size_of_remote
-
-# # Manage the eviction of an item from the cache.
-# function managed_evict(manager::CacheManager, id::UInt, x = last(manager.local_objects[id]).value)
-#     # Move this object to the remote store.
-#     move_to_remote!(x)
-#
-#     # We could be evicting an object that is already tracking a remote object.
-#     # If so, there's no need to register.
-#     if !haskey(manager.remote_objects, id)
-#         registerremote!(x)
-#     end
-#
-#     # Perform out own cleanup.
-#     # Since this happens on a callback, we can be sure that this object is not in the
-#     # local cache.
-#     #
-#     # However, we perform a debug check anyways.
-#     @check !in(id, manager.policy)
-#     @check haskey(manager.local_objects, id)
-#
-#     # Free this object from our local tracking.
-#     delete!(manager.local_objects, id)
-#     manager.size_of_local -= sizeof(x)
-#
-#     return nothing
-# end
 
 #####
 ##### API for adding and removing items from the
@@ -178,7 +163,7 @@ function register!(::PoolType{DRAM}, M::CacheManager, A)
     return nothing
 end
 
-update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, Block(A).id)
+update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, id(A))
 
 function unregister!(::PoolType{DRAM}, M::CacheManager, A)
     block = Block(A)
@@ -230,7 +215,7 @@ function cleanup(A, M = manager(A))
         # Deregister from PMM
         unregister!(PoolType{PMM}(), M, A)
         # Free this buffer
-        free(PoolType{PMM}(), block)
+        free(PoolType{PMM}(), M, block)
     elseif block.pool == DRAM
         unregister!(PoolType{DRAM}(), M, A)
 
@@ -240,9 +225,9 @@ function cleanup(A, M = manager(A))
             @check sibling.id == block.id
             @check sibling.pool == PMM
             unregister!(PoolType{PMM}(), M, A)
-            free(PoolType{PMM}(), sibling)
+            free(PoolType{PMM}(), M, sibling)
         end
-        free(PoolType{DRAM}(), block)
+        free(PoolType{DRAM}(), M, block)
     end
     return nothing
 end
@@ -275,7 +260,7 @@ function unsafe_alloc(
     ) where {T,N}
 
     allocsize = sizeof(T) * prod(dims)
-    ptr = alloc(manager.pmm_heap, allocsize)
+    ptr = alloc(manager.pmm_heap, allocsize, id)
 
     # If we still don't have anything, run a full GC.
     if isnothing(ptr)
@@ -345,7 +330,7 @@ end
 
 free_convert(x::Array) = pointer(x)
 free_convert(x::Ptr) = convert(Ptr{Nothing}, x)
-free_convert(x::Block) = datapointer(block)
+free_convert(x::Block) = datapointer(x)
 
 free(pool, manager::CacheManager, x) = free(pool, manager, free_convert(x))
 free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.dram_heap, ptr)
@@ -377,7 +362,6 @@ function doeviction!(manager, allocsize)
     end
 
     # Put back all of the items in the LRU that we didn't use.
-    pop!(stack)
     while !isempty(stack)
         push!(manager.policy, pop!(stack))
     end
@@ -397,8 +381,8 @@ function doeviction!(manager, allocsize)
     return nothing
 end
 
-prefetch!(A; kw...) = moveto!(PoolType{DRAM}, A, manager(A); kw...)
-evict!(A; kw...) = moveto!(PoolType{DRAM}, A, manager(A); kw...)
+prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
+evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
 
 #####
 ##### Moving Objects
@@ -407,13 +391,15 @@ evict!(A; kw...) = moveto!(PoolType{DRAM}, A, manager(A); kw...)
 function moveto!(::PoolType{DRAM}, A, M = manager(A); dirty = true)
     # Get the metadata for this object.
     block = Block(A)
-    @check isnull(block.sibling)
 
     # If the data is already local, mark a usage and return.
     if block.pool == DRAM
-        update!(PoolType{DRAM}(), A, M)
+        update!(PoolType{DRAM}(), M, A)
         return nothing
     end
+
+    # If this block is NOT in DRAM, then it shouldn't have a sibling.
+    @check isnull(block.sibling)
 
     # Otherwise, we need to allocate some local data for it.
     storage = unsafe_alloc(PoolType{DRAM}(), M, arraytype(A), size(A), block.id)
@@ -448,26 +434,32 @@ function moveto!(::PoolType{PMM}, A, M = manager(A))
     createstorage = isnull(sibling)
     if createstorage
         storage = unsafe_alloc(PoolType{PMM}(), M, arraytype(A), size(A), block.id)
+        sibling = unsafe_block(pointer(storage))
     else
-        storage = unsafe_wrap(arraytype(A), datapointer(block))
-        @check unsafe_block(pointer(storage)).id == block.id
+        storage = unsafe_wrap(
+            arraytype(A),
+            convert(Ptr{eltype(A)}, datapointer(sibling)),
+            size(A),
+        )
     end
+
+    @check sibling.id == block.id
 
     if block.dirty || createstorage
         memcpy!(storage, A, true)
     end
 
+    # Deregister this object from local tracking.
+    unregister!(PoolType{DRAM}(), M, A)
     update_pointer!(A, storage)
 
     # Free the block we just removed.
     free(PoolType{DRAM}(), M, block)
+    sibling.sibling = Block()
 
     # If we created storage for this array, we need to register the array in the remote
     # storage tracking.
     createstorage && register!(PoolType{PMM}(), M, A)
-
-    # Deregister this object from local tracking.
-    unregister!(PoolType{DRAM}(), M, A)
     return nothing
 end
 

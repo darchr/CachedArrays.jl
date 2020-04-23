@@ -10,6 +10,9 @@
     resize!(manager, 1_000_000_000)
     len = 2_000_000
 
+    DRAM = CachedArrays.DRAM
+    PMM = CachedArrays.PMM
+
     # Wrap in an `let` block for GC purposes
     let
         A = LockedCachedArray{Float32}(undef, len)
@@ -29,14 +32,11 @@
 
         # Evict A and prefetch it.
         # A should then be clean.
-        @test CachedArrays.islocal(A)
-        @test !CachedArrays.hasparent(A)
+        @test CachedArrays.pool(A) == DRAM
         CachedArrays.evict!(A)
-        @test !CachedArrays.islocal(A)
-        @test CachedArrays.hasparent(A)
+        @test CachedArrays.pool(A) == PMM
         CachedArrays.prefetch!(A)
-        @test CachedArrays.islocal(A)
-        @test CachedArrays.hasparent(A)
+        @test CachedArrays.pool(A) == DRAM
         @test !CachedArrays.isdirty(A)
 
         # Various flavors of "setindex!" should cause an error.

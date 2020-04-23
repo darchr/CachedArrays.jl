@@ -24,16 +24,17 @@ function LockedCachedArray{T}(::UndefInitializer, dims::NTuple{N,Int}) where {T,
     # Create the wrapped CachedArray
     array = CachedArray{T}(undef, dims)
     # We're creating it, so ensure that it is dirty.
-    array.dirty = true
     return LockedCachedArray(array)
 end
+
+Block(A::LockedCachedArray) = Block(A.array)
 
 Base.lock(x::CachedArray) = LockedCachedArray(x)
 Base.lock(x::LockedCachedArray) = x
 
 Base.unlock(x::CachedArray) = x
 function Base.unlock(x::LockedCachedArray)
-    x.array.dirty = true
+    setdirty!(x)
     return x.array
 end
 

@@ -35,8 +35,6 @@ arraytype(C::CachedArray{T,N}) where {T,N} = Array{T,N}
 # Get the metadata block for this cached array.
 Block(A::CachedArray) = unsafe_block(pointer(A))
 
-pool(A::CachedArray) = Block(A).pool
-
 function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) where {T,N,C}
     _x = unsafe_alloc(PoolType{DRAM}(), manager, typeof(x), size(x))
     copyto!(_x, x)

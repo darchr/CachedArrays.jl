@@ -1,4 +1,7 @@
 function gctest(manager)
+    DRAM = CachedArrays.DRAM
+    PMM = CachedArrays.PMM
+
     len = 1024
     B = rand(Float32, len)
     A = CachedArray{Float32}(undef, len)
@@ -10,10 +13,7 @@ function gctest(manager)
     @test length(A) == len
 
     # Internal detail
-    @test CachedArrays.parent(A) == nothing
-    @test !CachedArrays.isparent(A)
-    @test !CachedArrays.hasparent(A)
-    @test CachedArrays.islocal(A)
+    @test CachedArrays.pool(A) == DRAM
 
     # Make sure the global manager is updated correctly.
     @test CachedArrays.inlocal(manager, A)
@@ -26,9 +26,7 @@ function gctest(manager)
     CachedArrays.evict!(A)
 
     # Make sure our query functions work
-    @test CachedArrays.isparent(A)
-    @test CachedArrays.hasparent(A)
-    @test !CachedArrays.islocal(A)
+    @test CachedArrays.pool(A) == PMM
 
     # Make sure the cache gets updated.
     @test !CachedArrays.inlocal(manager, A)
@@ -39,9 +37,7 @@ function gctest(manager)
 
     # Now prefetch the array back
     CachedArrays.prefetch!(A)
-    @test !CachedArrays.isparent(A)
-    @test CachedArrays.hasparent(A)
-    @test CachedArrays.islocal(A)
+    @test CachedArrays.pool(A) == DRAM
 
     # The cache maanger should now have this array stored at both locations.
     @test CachedArrays.inlocal(manager, A)

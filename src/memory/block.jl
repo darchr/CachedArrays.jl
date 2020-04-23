@@ -50,13 +50,14 @@ end
 Block() = Block(Ptr{Nothing}(0))
 Block(address::UInt) = Block(Ptr{Nothing}(address))
 
+# Reserved room in for each allocation.
+headersize() = 64
+
 Base.pointer(x::Block) = getfield(x, :ptr)
 datapointer(x::Block) = pointer(x) + headersize()
 isnull(x::Block) = isnull(x.ptr)
 Base.isless(a::Block, b::Block) = a.ptr < b.ptr
 
-# Reserved room in for each allocation.
-headersize() = 64
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 
 mask(x) = one(x) << x
@@ -77,37 +78,37 @@ function setbits!(::Type{T}, ptr::Ptr, v, x...) where {T}
 end
 
 
-function Base.getproperty(x::Block, sym::Symbol)
-    if sym == :ptr
+function Base.getproperty(x::Block, name::Symbol)
+    if name == :ptr
         return pointer(x)
-    elseif sym == :size
+    elseif name == :size
         # Load the first 8 bytes which encodes the size as a UInt64
         # Mask out the lower 6 bits since those are reserved for other metadata.
         return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & ~UInt(0x3F)
 
     # Bitmask metadata
-    elseif sym == :bitmasks
+    elseif name == :bitmasks
         return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & UInt(0x3F)
-    elseif sym == :free
+    elseif name == :free
         return Bool(getbits(UInt, pointer(x), 0))
-    elseif sym == :pool
+    elseif name == :pool
         return Pool(getbits(UInt, pointer(x), 1, 2))
-    elseif sym == :dirty
+    elseif name == :dirty
         return Bool(getbits(UInt, pointer(x), 3))
 
     # Bytes 15..8
-    elseif sym == :next
+    elseif name == :next
         return unsafe_load(convert(Ptr{Block}, pointer(x) + 8))
 
-    elseif sym == :id
+    elseif name == :id
         return unsafe_load(convert(Ptr{UInt64}, pointer(x) + 8))
 
     # Bytes 23..16
-    elseif sym == :previous || sym == :sibling
+    elseif name == :previous || name == :sibling
         return unsafe_load(convert(Ptr{Block}, pointer(x) + 16))
 
     # bytes 31..24
-    elseif sym == :alloc_size
+    elseif name == :alloc_size
         return unsafe_load(convert(Ptr{UInt64}, pointer(x) + 24))
 
     else
@@ -136,14 +137,14 @@ function Base.setproperty!(x::Block, name::Symbol, v)
         unsafe_store!(convert(Ptr{UInt64}, pointer(x) + 8), convert(UInt64, v))
 
     # bytes 23..16
-    elseif name == :previous || sym == :sibling
+    elseif name == :previous || name == :sibling
         unsafe_store!(convert(Ptr{Block}, pointer(x) + 16), v::Block)
 
     # bytes 31..24
-    elseif sym == :alloc_size
+    elseif name == :alloc_size
         unsafe_store!(convert(Ptr{UInt64}, pointer(x) + 24), v::UInt64)
     else
-        error()
+        error("Unknown field: $name")
     end
 end
 

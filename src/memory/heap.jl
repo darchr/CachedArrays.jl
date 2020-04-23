@@ -280,7 +280,11 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
         # Mark this block as used
         block.free = false
         !isnothing(id) && (block.id = id)
+
+        # Configure metadata
+        # Set the pool number and zero out the sibling block.
         block.pool = heap.pool
+
         ptr = pointer(block) + headersize()
         push!(heap.active_pointers, ptr)
         return ptr
