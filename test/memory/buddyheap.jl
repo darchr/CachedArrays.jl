@@ -1,48 +1,6 @@
 @testset "Testing Custom BuddyHeap Manager" begin
-    # Test "Block"
-    #
-    # Make a 64 byte vector that our "block" will modify
-    allocator = CachedArrays.AlignedAllocator()
-    V = unsafe_wrap(
-        Vector{UInt8},
-        convert(Ptr{UInt8}, CachedArrays.allocate(allocator, 64)),
-        64
-    )
-    finalizer(V) do x
-        CachedArrays.free(allocator, convert(Ptr{Nothing}, pointer(x)))
-    end
-    V .= 0
-
-    block = CachedArrays.Block(convert(Ptr{Nothing}, pointer(V)))
-
-    @test pointer(block) == convert(Ptr{Nothing}, pointer(V))
-
-    # Since we've started this from an array of all zeros, the size, next, and previous
-    # blocks should all be zer.
-    @test block.size == 0
-    @show block.next
-    @show block.previous
-    @test CachedArrays.isnull(block.next)
-    @test CachedArrays.isnull(block.previous)
-    @test block.free == false
-
-    # Try changing the size
-    block.size = 2^20
-    @test block.size == 2^20
-    block.free = true
-
-    @test block.free
-    @test CachedArrays.isfree(block)
-    block.free = false
-    @test !block.free
-
-    x = Ptr{UInt64}(rand(UInt64))
-    b = CachedArrays.Block(x)
-    block.next = b
-    @test block.next == b
-    @test pointer(block.next) == x
-
     # Start with a small heap for our experiments.
+    allocator = CachedArrays.AlignedAllocator()
     len = 2^20
     heap = CachedArrays.BuddyHeap(allocator, len)
 

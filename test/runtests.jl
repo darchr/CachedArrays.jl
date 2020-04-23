@@ -3,14 +3,15 @@ using Test
 using Random
 using BenchmarkTools
 
+include("memkind.jl")
+include("memory/block.jl")
 include("memory/buddyheap.jl")
 
-include("memkind.jl")
 include("memcpy.jl")
 
 include("policy/lru.jl")
 
-include("cache.jl")
+include("manager.jl")
 include("array.jl")
 include("locked.jl")
 

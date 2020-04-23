@@ -9,7 +9,8 @@ maybesuper(::AbstractCachedArray{T,N}) where {T,N} = DenseArray{T,N}
 maybesuper(::T) where {T} = T
 
 # Define prefetching to do nothing for non-cached arrays.
-prefetch!(x) = nothing
+maybeprefetch(x) = nothing
+maybeprefetch(x::AbstractCachedArray) = prefetch!(x)
 _esc(x) = :($(esc(x)))
 
 function prefetch_impl(expr::Expr)
@@ -19,7 +20,7 @@ function prefetch_impl(expr::Expr)
     def[:args] = map(_esc, def[:args])
 
     prefetch = map(names) do arg
-        :(prefetch!($(esc(arg))))
+        :(maybeprefetch($(esc(arg))))
     end
 
     tupletype = map(names) do arg

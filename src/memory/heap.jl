@@ -13,6 +13,7 @@ const MIN_ALLOCATION = 4096
 const LOG2_MIN_ALLOCATION = ceil(Int, log2(MIN_ALLOCATION))
 
 getbin(sz) = ceil(Int, log2(sz)) - LOG2_MIN_ALLOCATION + 1
+getbin(block::Block) = getbin(block.size)
 binsize(i) = MIN_ALLOCATION * 2^(i-1)
 
 # Get the buddy block for a given header.
@@ -28,7 +29,7 @@ function getbuddy(heap, block::Block)
     buddy_address = shift + base
 
     # If the buddy address is out of range, this block does not have a buddy.
-    if buddy_address + block.size > base + heap.len
+    if buddy_address + block.size > base + sizeof(heap)
         return nothing
     else
         return Block(shift + base)
@@ -42,6 +43,9 @@ mutable struct BuddyHeap{T}
     base::Ptr{Nothing}
     len::Int
 
+    # Which pool is this?
+    pool::Pool
+
     # Keep track of the pointers we have out in the wild.
     # This helps us deal with double-frees.
     #
@@ -52,10 +56,12 @@ mutable struct BuddyHeap{T}
     freelists::Vector{Block}
 end
 
+Base.sizeof(heap::BuddyHeap) = heap.len
+
 baseaddress(heap::BuddyHeap) = convert(UInt, heap.base)
 numbins(heap::BuddyHeap) = length(heap.freelists)
 
-function BuddyHeap(allocator::T, sz; maxallocation = nothing) where {T}
+function BuddyHeap(allocator::T, sz; pool = DRAM, maxallocation = nothing) where {T}
     # Make an initial allocation of `sz`.
     base = allocate(allocator, sz)
 
@@ -68,6 +74,7 @@ function BuddyHeap(allocator::T, sz; maxallocation = nothing) where {T}
         allocator,
         base,
         sz,
+        pool,
         Set{Ptr{Nothing}}(),
         freelists,
     )
@@ -110,7 +117,7 @@ function Base.iterate(heap::BuddyHeap)
     return (block, block)
 end
 function Base.iterate(heap::BuddyHeap, block::Block)
-    if pointer(block) + block.size >= heap.base + heap.len
+    if pointer(block) + block.size >= heap.base + sizeof(heap)
         return nothing
     end
     block = Block(pointer(block) + block.size)
@@ -273,6 +280,7 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
         # Mark this block as used
         block.free = false
         !isnothing(id) && (block.id = id)
+        block.pool = heap.pool
         ptr = pointer(block) + headersize()
         push!(heap.active_pointers, ptr)
         return ptr
@@ -318,7 +326,7 @@ function canallocfrom(heap::BuddyHeap, block::Block, sz)
     # If, starting at this address, we go down to the nearest block boundary that
     # can contain this block, go up by the size, and still remain in the heap,
     # then we can allocated from here.
-    return address(block) - md + bsz <= baseaddress(heap) + heap.len
+    return address(block) - md + bsz <= baseaddress(heap) + sizeof(heap)
 end
 
 @inline function evict!(heap::BuddyHeap, block::Block; cb = donothing)
@@ -444,7 +452,7 @@ function sizecheck(heap::BuddyHeap)
     for block in heap
         sz += block.size
     end
-    return sz == heap.len
+    return sz == sizeof(heap)
 end
 
 function check(heap::BuddyHeap)
