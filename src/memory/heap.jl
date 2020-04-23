@@ -46,12 +46,6 @@ mutable struct BuddyHeap{T}
     # Which pool is this?
     pool::Pool
 
-    # Keep track of the pointers we have out in the wild.
-    # This helps us deal with double-frees.
-    #
-    # TODO: Remove this.
-    active_pointers::Set{Ptr{Nothing}}
-
     # The start to blocks, indexed by their size in the buddy system.
     freelists::Vector{Block}
 end
@@ -75,7 +69,6 @@ function BuddyHeap(allocator::T, sz; pool = DRAM, maxallocation = nothing) where
         base,
         sz,
         pool,
-        Set{Ptr{Nothing}}(),
         freelists,
     )
 
@@ -279,6 +272,7 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
     else
         # Mark this block as used
         block.free = false
+        block.evicting = false
         !isnothing(id) && (block.id = id)
 
         # Configure metadata
@@ -286,17 +280,18 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
         block.pool = heap.pool
 
         ptr = pointer(block) + headersize()
-        push!(heap.active_pointers, ptr)
         return ptr
     end
 end
 
 free(heap::BuddyHeap, ptr::Ptr) = free(heap, convert(Ptr{Nothing}, ptr))
 function free(heap::BuddyHeap, ptr::Ptr{Nothing})
-    !in(ptr, heap.active_pointers) && return nothing
-
     # Get the block from the pointer
-    block = Block(ptr - headersize())
+    block = unsafe_block(ptr)
+
+    # This block is being evicted - bypass the normal free logic.
+    block.evicting && return nothing
+
     block.free = true
     @check !iszero(block.size)
     # Put that thing back where it came from, or so help me!
@@ -336,15 +331,13 @@ end
 @inline function evict!(heap::BuddyHeap, block::Block; cb = donothing)
     @check !isfree(block)
 
-    # Override the normal collection procedure by deleting the pointer to
-    # this block from the tracked pointers.
-    #
-    # This will ensure that even if this block is returned to the heap, it
-    # won't be merged with its buddy
-    delete!(heap.active_pointers, pointer(block) + headersize())
+    # Mark this block as being evicted.
+    # This will ensure that any calls to `free` on this block that happen during the
+    # callback `cb` will short-circuit.
+    block.evicting = true
 
-    # Get the ID for the object that lives here, force free the block and
-    # return it.
+    # Perfrom the callback on the block ID.
+    # After the call back, assume that the block is now ours.
     cb(block.id)
     block.free = true
     return nothing

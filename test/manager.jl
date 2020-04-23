@@ -12,7 +12,9 @@
     A = CachedArray{UInt8}(undef, (500000,), manager)
     @test CachedArrays.localsize(manager) == sizeof(A)
     @test CachedArrays.pool(A) == DRAM
-    @test_throws AssertionError CachedArrays.register!(PoolType{DRAM}(), manager, A)
+    if CachedArrays.DEBUG
+        @test_throws AssertionError CachedArrays.register!(PoolType{DRAM}(), manager, A)
+    end
 
     B = CachedArray{UInt8}(undef, (300000,), manager)
     @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(B)
@@ -27,7 +29,9 @@
     @test CachedArrays.pool(A) == PMM
     @test CachedArrays.pool(B) == DRAM
     @test CachedArrays.pool(C) == DRAM
-    @test_throws AssertionError CachedArrays.register!(PoolType{PMM}(), manager, A)
+    if CachedArrays.DEBUG
+        @test_throws AssertionError CachedArrays.register!(PoolType{PMM}(), manager, A)
+    end
 
     # Prefetch A, should kick out both B.
     # C should stay in the cache.

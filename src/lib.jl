@@ -14,7 +14,7 @@ maybeprefetch(x::AbstractCachedArray) = prefetch!(x)
 _esc(x) = :($(esc(x)))
 
 function prefetch_impl(expr::Expr)
-    def = splitdef(expr)
+    def = MacroTools.splitdef(expr)
     names = first.(MacroTools.splitarg.(def[:args]))
     def[:name] = esc(def[:name])
     def[:args] = map(_esc, def[:args])
@@ -31,7 +31,12 @@ function prefetch_impl(expr::Expr)
     # We just use direct overloading as a trick to get the prefetch calls in.
     def[:body] = quote
         $(prefetch...)
-        return Base.invoke($(def[:name]), Tuple{$(tupletype...)}, $(esc.(names)...); $(def[:kwargs]...))
+        return Base.invoke(
+            $(def[:name]),
+            Tuple{$(tupletype...)},
+            $(esc.(names)...);
+            $(def[:kwargs]...)
+        )
     end
 
     return MacroTools.combinedef(def)

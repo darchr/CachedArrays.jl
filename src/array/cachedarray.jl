@@ -1,4 +1,5 @@
 abstract type AbstractCachedArray{T,N} <: DenseArray{T,N} end
+cacheable(::AbstractCachedArray) = Cacheable()
 
 # Must make this mutable so we can attach a finalizer to it, unfortunately.
 mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
@@ -22,18 +23,23 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
             manager,
         )
 
-        register!(PoolType{DRAM}(), manager, A)
-        finalizer(cleanup, A)
+        register!(A)
         return A
     end
 end
 
-# Callback, update the backing array for this CachedArray.
-update_pointer!(C::CachedArray{T,N}, A::Array{T,N}) where {T,N} = (C.array = A)
+#####
+##### `Cacheable` Interface
+#####
+
+Base.pointer(A::AbstractCachedArray) = pointer(A.array)
+manager(x::AbstractCachedArray) = x.manager
+replace!(C::CachedArray{T,N}, A::Array{T,N}) where {T,N} = (C.array = A)
 arraytype(C::CachedArray{T,N}) where {T,N} = Array{T,N}
 
-# Get the metadata block for this cached array.
-Block(A::CachedArray) = unsafe_block(pointer(A))
+#####
+##### Constructors
+#####
 
 function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) where {T,N,C}
     _x = unsafe_alloc(PoolType{DRAM}(), manager, typeof(x), size(x))
@@ -42,7 +48,6 @@ function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) w
 end
 
 CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
-manager(x::AbstractCachedArray) = x.manager
 
 function CachedArray{T}(::UndefInitializer, i::Integer) where {T}
     return CachedArray{T}(undef, (convert(Int, i),))
@@ -55,8 +60,6 @@ function CachedArray{T}(
     ) where {T,N,C}
 
     array = unsafe_alloc(PoolType{DRAM}(), manager, Array{T,N}, dims)
-
-    # Default the `remote_ptr` to a null ptr
     A = CachedArray{T,N,C}(array, manager)
     return A
 end
@@ -65,7 +68,6 @@ end
 ##### Array Interface
 #####
 
-Base.pointer(A::AbstractCachedArray) = pointer(A.array)
 Base.unsafe_convert(::Type{Ptr{T}}, A::AbstractCachedArray{T}) where {T} = pointer(A)
 @inline Base.size(A::AbstractCachedArray) = size(A.array)
 Base.sizeof(A::AbstractCachedArray) = sizeof(A.array)
@@ -104,71 +106,3 @@ function Base.similar(bc::Broadcast.Broadcasted{CachedStyle}, ::Type{ElType}) wh
     return similar(CachedArray{ElType}, axes(bc))
 end
 
-#####
-##### API for fetching and storing the array.
-#####
-
-# # Prefetch `A` into local memory.
-# # If `A` is already local, don't do any updates, including anything with the `dirty` flag.
-# # If `A` is remote, fetch it and set the dirty flag.
-# function prefetch!(A::CachedArray; dirty = true)
-#     # If already local, update position in the LRU
-#     if islocal(A)
-#         updatelocal!(A)
-#         return nothing
-#     end
-#
-#     # Need to allocate a local array.
-#     #localstorage = similar(_array(A))
-#     localstorage = unsafe_local_alloc(manager(A), typeof(_array(A)), size(_array(A)), id(A))
-#
-#     # TODO: Fast copy using AVX
-#     memcpy!(localstorage, _array(A))
-#
-#     # Update the CachedArray
-#     A.parent = _array(A)
-#     A.array = localstorage
-#
-#     # Register with the cache manager
-#     registerlocal!(A)
-#     A.dirty = dirty
-# end
-#
-# function evict!(A::CachedArray)
-#     isremote(A) && return nothing
-#
-#     # If this array does not have a parent and it's being evicted rather than freed,
-#     # Then we have to create a parent array for it.
-#     hp = hasparent(A)
-#
-#     # If we just created the parent or if this array is dirty,
-#     # we must move it to the remote storage.
-#     move_to_remote!(A)
-#     if !hp
-#         registerremote!(A)
-#     end
-#     freelocal!(A)
-#     A.dirty = false
-#
-#     return nothing
-# end
-#
-# function move_to_remote!(A::CachedArray)
-#     hp = hasparent(A)
-#     dirty = isdirty(A)
-#     if !hp
-#         A.parent = remote_alloc(manager(A), typeof(_array(A)), size(A))
-#     end
-#
-#     # Write back if the array is dirty of if the parent was just created.
-#     if dirty || !hp
-#         memcpy!(parent(A), _array(A), true)
-#     end
-#
-#     # Clean up the local array.
-#     local_free(manager(A), _array(A))
-#     A.array = parent(A)
-#
-#     return nothing
-# end
-#

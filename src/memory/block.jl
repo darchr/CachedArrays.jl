@@ -21,6 +21,7 @@ struct PoolType{T} end
 #       bit 0: 1 if the block is free, 0 if it is not free.
 #       bit 1-2: Pool ID: 00 if DRAM, 01 if PMM. These bits correspond to the `Pool` enum.
 #       bit 3: dirty bit: 0 if clean, 1 if dirty
+#       bit 4: evicting bit: 0 if normal free, 1 if being evicted
 #
 #    Size can be obtained with `block.size`.
 #    The free state is obtained with `block.free`.
@@ -46,12 +47,14 @@ struct PoolType{T} end
 #    The actual allocation size of the block
 struct Block
     ptr::Ptr{Nothing}
-end
-Block() = Block(Ptr{Nothing}(0))
-Block(address::UInt) = Block(Ptr{Nothing}(address))
 
-# Reserved room in for each allocation.
-headersize() = 64
+    # Inner constructor for ambiguity resolution
+    Block(ptr::Ptr{Nothing}) = new(ptr)
+end
+
+Block() = Block(Ptr{Nothing}(0))
+Block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr))
+Block(address::UInt) = Block(Ptr{Nothing}(address))
 
 Base.pointer(x::Block) = getfield(x, :ptr)
 datapointer(x::Block) = pointer(x) + headersize()
@@ -60,23 +63,41 @@ Base.isless(a::Block, b::Block) = a.ptr < b.ptr
 
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 
+#####
+##### Can we construct a block from an object?
+#####
+
+struct Cacheable end
+cacheable(x) = nothing
+
+Block(x) = Block(x, cacheable(x))
+Block(x, ::Nothing) = error("Cannot create a block from objects of type $(typeof(x))")
+Block(x, ::Cacheable) = unsafe_block(pointer(x))
+
+# Reserved room in for each allocation.
+headersize() = 64
+
 mask(x) = one(x) << x
 mask(x, y...) = mask(x) | mask(y...)
 
-# TODO: Make this a macro to make this faster
-function getbits(::Type{T}, ptr::Ptr, x...) where {T}
-    return (unsafe_load(convert(Ptr{T}, ptr)) & mask(x...)) >> minimum(x)
+macro getbits(typ, ptr, x::Integer...)
+    # Precomput the mask and minimum value
+    msk = mask(x...)
+    min = minimum(x)
+    return :((unsafe_load(convert(Ptr{$typ}, $(esc(ptr)))) & $msk) >> $min)
 end
 
-function setbits!(::Type{T}, ptr::Ptr, v, x...) where {T}
-    cptr = convert(Ptr{T}, ptr)
-    m = minimum(x)
-    y = unsafe_load(cptr) & ~mask(x...)
-    y |= (v & mask((x .- m)...)) << m
-    unsafe_store!(cptr, y)
-    return nothing
+macro setbits!(typ, ptr, v, x::Integer...)
+    load_clear_mask = ~mask(x...)
+    min = minimum(x)
+    set_clear_mask = mask((x .- min)...)
+    return quote
+        cptr = convert(Ptr{$typ}, $(esc(ptr)))
+        y = unsafe_load(cptr) & $load_clear_mask
+        y |= ($(esc(v)) & $set_clear_mask) << $min
+        unsafe_store!(cptr, y)
+    end
 end
-
 
 function Base.getproperty(x::Block, name::Symbol)
     if name == :ptr
@@ -90,11 +111,13 @@ function Base.getproperty(x::Block, name::Symbol)
     elseif name == :bitmasks
         return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & UInt(0x3F)
     elseif name == :free
-        return Bool(getbits(UInt, pointer(x), 0))
+        return Bool(@getbits(UInt, pointer(x), 0))
     elseif name == :pool
-        return Pool(getbits(UInt, pointer(x), 1, 2))
+        return Pool(@getbits(UInt, pointer(x), 1, 2))
     elseif name == :dirty
-        return Bool(getbits(UInt, pointer(x), 3))
+        return Bool(@getbits(UInt, pointer(x), 3))
+    elseif name == :evicting
+        return Bool(@getbits(UInt, pointer(x), 4))
 
     # Bytes 15..8
     elseif name == :next
@@ -123,11 +146,13 @@ function Base.setproperty!(x::Block, name::Symbol, v)
         unsafe_store!(convert(Ptr{UInt64}, pointer(x)), sz | x.bitmasks)
     # Bit masks
     elseif name == :free
-        setbits!(UInt8, pointer(x), UInt8(v::Bool), 0)
+        @setbits!(UInt8, pointer(x), UInt8(v::Bool), 0)
     elseif name == :pool
-        setbits!(UInt8, pointer(x), UInt8(v::Pool), 1,2)
+        @setbits!(UInt8, pointer(x), UInt8(v::Pool), 1, 2)
     elseif name == :dirty
-        setbits!(UInt8, pointer(x), UInt8(v::Bool), 3)
+        @setbits!(UInt8, pointer(x), UInt8(v::Bool), 3)
+    elseif name == :evicting
+        @setbits!(UInt8, pointer(x), UInt8(v::Bool), 4)
 
     # bytes 15..8
     elseif name == :next

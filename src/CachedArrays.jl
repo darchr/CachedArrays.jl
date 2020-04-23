@@ -8,7 +8,7 @@ import Dates
 # Dependencies
 import DataStructures
 import SIMD
-using MacroTools
+import MacroTools
 
 # Control whether asserts are active
 # Default to `true` for now because of development

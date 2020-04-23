@@ -12,7 +12,7 @@ mutable struct CacheManager{C,P,Q}
     size_of_local::Int
 
     # Create a new ID for each object registerd in the cache.
-    object_count::UInt
+    idcount::UInt
 
     # All objects with remote memory.
     # Useful for defragmentation.
@@ -56,7 +56,7 @@ function CacheManager{T}(
 
     local_objects = Dict{UInt,Tuple{Block,WeakRef}}()
     size_of_local = 0
-    object_count = one(UInt)
+    idcount = one(UInt)
 
     remote_objects = Dict{UInt,Tuple{Block,WeakRef}}()
     size_of_remote = 0
@@ -71,7 +71,7 @@ function CacheManager{T}(
     manager = CacheManager{T,typeof(pmm_heap),typeof(dram_heap)}(
         local_objects,
         size_of_local,
-        object_count,
+        idcount,
         remote_objects,
         size_of_remote,
         policy,
@@ -96,6 +96,19 @@ setdirty!(A, flag::Bool = true) = setdirty!(A, manager(A), flag)
 setdirty!(A, M::CacheManager, flag::Bool = true) = (Block(A).dirty = flag)
 
 isdirty(A) = Block(A).dirty
+id(x) = Block(x).id
+pool(x) = Block(x).pool
+
+prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
+evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
+
+manager(x) = error("Implement `manager` for $(typeof(x))")
+
+function getid(manager::CacheManager)
+    id = manager.idcount
+    manager.idcount += 1
+    return id
+end
 
 function Base.show(io::IO, M::CacheManager)
     println(io, "Cache Manager")
@@ -126,27 +139,33 @@ function resize_remote!(M::CacheManager, maxsize; maxallocation = nothing)
     return nothing
 end
 
+# TODO: Rename these
 inlocal(manager, x) = haskey(manager.local_objects, id(x))
 inremote(manager, x) = haskey(manager.remote_objects, id(x))
-
-function getid(manager::CacheManager)
-    id = manager.object_count
-    manager.object_count += 1
-    return id
-end
-
-# Fallback Definitions
-id(x) = Block(x).id
-pool(x) = Block(x).pool
-
-manager(x) = error("Implement `manager` for $(typeof(x))")
-
 localsize(manager::CacheManager) = manager.size_of_local
 remotesize(manager::CacheManager) = manager.size_of_remote
 
 #####
 ##### API for adding and removing items from the
 #####
+
+register!(A) = register!(manager(A), A)
+function register!(M::CacheManager, A)
+    # Register with the appropriate pool.
+    # Statically dispatch to avoid a potential allocation.
+    p = pool(A)
+    if p == DRAM
+        register!(PoolType{DRAM}(), M, A)
+    elseif p == PMM
+        register!(PoolType{PMM}(), M, A)
+    else
+        error("Unknown Pool: $p")
+    end
+
+    # Attach a finalizer to `A`.
+    finalizer(cleanup, A)
+    return nothing
+end
 
 function register!(::PoolType{DRAM}, M::CacheManager, A)
     block = Block(A)
@@ -381,9 +400,6 @@ function doeviction!(manager, allocsize)
     return nothing
 end
 
-prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
-evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
-
 #####
 ##### Moving Objects
 #####
@@ -411,7 +427,7 @@ function moveto!(::PoolType{DRAM}, A, M = manager(A); dirty = true)
 
     newblock.sibling = block
     block.sibling = newblock
-    update_pointer!(A, storage)
+    replace!(A, storage)
 
     # Track this object
     register!(PoolType{DRAM}(), M, A)
@@ -451,7 +467,7 @@ function moveto!(::PoolType{PMM}, A, M = manager(A))
 
     # Deregister this object from local tracking.
     unregister!(PoolType{DRAM}(), M, A)
-    update_pointer!(A, storage)
+    replace!(A, storage)
 
     # Free the block we just removed.
     free(PoolType{DRAM}(), M, block)
