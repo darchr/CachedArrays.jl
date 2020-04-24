@@ -8,8 +8,12 @@
     @test pointer(block) == convert(Ptr{Nothing}, pointer(V))
     @test CachedArrays.address(block) == convert(UInt, pointer(block))
 
-    # Test printing code
+    ### printing code
+
+    # Make sure printing null block doesn't segfault ...
+    println(devnull, CachedArrays.Block())
     println(devnull, block)
+
 
     # Since we've started this from an array of all zeros, the size, next, and previous
     # blocks should all be zer.

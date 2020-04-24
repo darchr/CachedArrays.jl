@@ -100,7 +100,7 @@ end
 # Specialize `memcpy` for CachedArrays.
 # TODO: Figure out maximum number of threads for copying from PMM to PMM
 function memcpy!(dest::AbstractCachedArray{T}, src::AbstractArray{T}; kw...) where {T}
-    return _memcpy!(dest, src, isremote(dest); kw...)
+    return _memcpy!(dest, src, pool(dest) == PMM; kw...)
 end
 
 function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false; forcesingle = nothing) where {T}

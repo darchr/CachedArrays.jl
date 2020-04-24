@@ -10,11 +10,11 @@ const DATAFILE = joinpath(@__DIR__, "..", "data.jls")
 getdb() = ispath(DATAFILE) ? ExperimentsDB.load(DATAFILE) : ExperimentsDB.Database()
 
 # Alow for debugging
-#@static if DEBUG
-#    save(x) = nothing
-#else
-    save(x) = ExperimentsDB.save(DATAFILE, x)
-#end
+@static if DEBUG
+    save(x) = nothing
+else
+   save(x) = ExperimentsDB.save(DATAFILE, x)
+end
 
 # By default, we run on Socket 1
 default_cpuset() = 25:48
@@ -100,7 +100,6 @@ _first(x::Pair) = first(x)
 makekey(x...) = join(_first.(x), " - ")
 
 function runner(@nospecialize(f), params::BenchmarkParameters; force = false)
-
     # Now, grab the database.
     # See if we have entries for this.
     db = getdb()
@@ -210,10 +209,26 @@ end
 ##### The actual entry points
 #####
 
-function tests_1d()
-    # Setup and get arrays
-    setup()
-    arrays = alloc_1d()
+function tests_1d(totalsize, arraysize)
+    # if in 2LM mode, all of the temporary arrays should go into local memory
+    if IS_2LM
+        # Round up for headroom
+        localsize = round(Int, totalsize * 1.5)
+        remotesize = 4096
+    # Size local mamory to be a little smaller than the DRAM cache to allow for other
+    # program activities that don't belong to our heap.
+    else
+        localsize = DEBUG ? totalsize >> 1 : 180_000_000_000
+        remotesize = DEBUG ? 2 * totalsize : 1_000_000_000_000
+    end
+
+    manager = CachedArrays.CacheManager(
+        ENV["JULIA_PMEM_PATH"];
+        localsize = localsize,
+        remotesize = remotesize
+    )
+
+    arrays = alloc_1d(manager, totalsize, arraysize)
     mode = IS_2LM ?  "2LM" : "1LM"
 
     #####
@@ -221,7 +236,7 @@ function tests_1d()
     #####
 
     # If we have a small total size, do more iterations.
-    if TOTALSIZE < 180_000_000_000
+    if totalsize < 180_000_000_000
         iterations = 10
     else
         iterations = 2

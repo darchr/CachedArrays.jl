@@ -1,13 +1,13 @@
 # Allocation of our arrays.
-function alloc_1d()
-    num = div(TOTALSIZE, ARRAYSIZE)
+function alloc_1d(manager, totalsize, arraysize)
+    num = div(totalsize, arraysize)
 
     #####
     ##### Allocate the large arrays
     #####
 
-    numelements = div(ARRAYSIZE, sizeof(Float32))
-    arrays = [LockedCachedArray{Float32}(undef, numelements) for _ in 1:num]
+    numelements = div(arraysize, sizeof(Float32))
+    arrays = [LockedCachedArray{Float32}(undef, manager, numelements) for _ in 1:num]
 
     # Zero initialize the arrays.
     # Important to make sure the OS actually gives us the physical pages.

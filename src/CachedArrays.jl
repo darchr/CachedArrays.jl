@@ -13,6 +13,9 @@ import MacroTools
 # Control whether asserts are active
 # Default to `true` for now because of development
 const DEBUG = get(ENV, "JULIA_CACHEDARRAYS_DEBUG", true)
+
+# Check ALL array updates for correctness.
+const PEDANTIC = false
 const THREADED_COPY = true
 
 # Flag to indicate if we're in 2LM.

@@ -42,9 +42,7 @@ struct PoolType{T} end
 #    access with 'block.sibling'.
 #    If 'isnull(block.sibling)', then the sibling does not exist.
 #    A sibling is a copy of the array that lives in another memory pool.
-#
-# bytes 31..24
-#    The actual allocation size of the block
+
 struct Block <: AbstractMetadata
     ptr::Ptr{Nothing}
 
@@ -123,10 +121,6 @@ function Base.getproperty(x::Block, name::Symbol)
     elseif name == :previous || name == :sibling
         return unsafe_load(convert(Ptr{Block}, pointer(x) + 16))
 
-    # bytes 31..24
-    elseif name == :alloc_size
-        return unsafe_load(convert(Ptr{UInt64}, pointer(x) + 24))
-
     else
         error()
     end
@@ -158,9 +152,6 @@ function Base.setproperty!(x::Block, name::Symbol, v)
     elseif name == :previous || name == :sibling
         unsafe_store!(convert(Ptr{Block}, pointer(x) + 16), v::Block)
 
-    # bytes 31..24
-    elseif name == :alloc_size
-        unsafe_store!(convert(Ptr{UInt64}, pointer(x) + 24), v::UInt64)
     else
         error("Unknown field: $name")
     end
@@ -186,6 +177,11 @@ setsibling!(x::Block, y::Block) = (x.sibling = y)
 
 # Helpful Displaying.
 function Base.show(io::IO, block::Block)
+    if isnull(block)
+        println(io, "Null Block")
+        return nothing
+    end
+
     println(io, "Block")
     println(io, "    Address: 0x", string(address(block); base = 16))
     println(io, "    Size: ", block.size)

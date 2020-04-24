@@ -6,7 +6,6 @@ end
 Base.isless(a::P, b::P) where {P <: Priority} = isless(a.priority, b.priority)
 Base.:(==)(a::P, b::P) where {P <: Priority} = a.priority == b.priority
 Base.hash(a::Priority, h::UInt = UInt(0x0)) = hash(a.priority, h)
-ischeap(a::Priority) = a.priority == -1
 
 getval(::Type{T}, x::Priority{T}) where {T} = x.val
 
@@ -18,9 +17,6 @@ mutable struct LRU{T}
     heap::DataStructures.MutableBinaryHeap{Priority{T}, DataStructures.LessThan}
     # Map items to their handles
     handles::Dict{T,Int}
-
-    # Keep a list of objects that have marked themselves as cheap evicts.
-    cheap::Set{Priority{T}}
 end
 
 function LRU{T}(maxsize) where {T}
@@ -28,7 +24,6 @@ function LRU{T}(maxsize) where {T}
         0,
         DataStructures.MutableBinaryMinHeap{Priority{T}}(),
         Dict{T,Int}(),
-        Set{Priority{T}}(),
     )
 end
 
@@ -43,11 +38,6 @@ Base.isempty(lru::LRU) = isempty(lru.heap)
 Remove the least recently used item from the cache and return it.
 """
 function Base.pop!(C::LRU)
-    # If we have cheap items to evict, do that.
-    if !isempty(C.cheap)
-        return getval(pop!(C.cheap))
-    end
-
     # Pop items off the top of the heap.
     # Keep doing this as long as we are getting sentinels.
     v = pop!(C.heap)
@@ -56,7 +46,6 @@ function Base.pop!(C::LRU)
 end
 
 function fullpop!(C::LRU)
-    !isempty(C.cheap) && return pop!(C.cheap)
     v = pop!(C.heap)
     delete!(C.handles, v.val)
     return v
@@ -73,16 +62,9 @@ function Base.push!(C::LRU{T}, v::T) where {T}
 end
 
 function Base.push!(C::LRU{T}, v::Priority{T}) where {T}
-    ischeap(v) && push!(C.cheap, v)
     @check !haskey(C.handles, v.val)
     C.handles[v.val] = push!(C.heap, v)
     return v
-end
-
-function cheapevict(C::LRU{T}, v::T) where {T}
-    delete!(C, v)
-    push!(C.cheap, Priority(-1, v))
-    return nothing
 end
 
 """

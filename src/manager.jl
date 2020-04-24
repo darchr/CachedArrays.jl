@@ -213,9 +213,12 @@ end
 ##### Cleanup Finalizer
 #####
 
+const CLEANUP_LIST = UInt[]
+
 function cleanup(A, M = manager(A))
     # Get the block for this object.
     block = metadata(A)
+    push!(CLEANUP_LIST, getid(block))
 
     # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
     # be an error.

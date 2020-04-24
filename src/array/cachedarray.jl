@@ -29,8 +29,19 @@ end
 #####
 
 Base.pointer(A::AbstractCachedArray) = pointer(A.array)
-manager(x::AbstractCachedArray) = x.manager
-replace!(C::CachedArray{T,N}, A::Array{T,N}) where {T,N} = (C.array = A)
+
+# We need to put a return type annotation because otherwise, Julia doesn't like
+# inferring this.
+function manager(x::CachedArray{T,N,C})::C where {T,N,C}
+    return x.manager
+end
+
+function replace!(C::CachedArray{T,N}, A::Array{T,N}) where {T,N}
+    PEDANTIC && @assert C.array == A
+
+    C.array = A
+    return nothing
+end
 arraytype(C::CachedArray{T,N}) where {T,N} = Array{T,N}
 
 # utils
