@@ -16,9 +16,27 @@ getbin(sz) = ceil(Int, log2(sz)) - LOG2_MIN_ALLOCATION + 1
 getbin(block::Block) = getbin(block.size)
 binsize(i) = MIN_ALLOCATION * 2^(i-1)
 
+mutable struct BuddyHeap{T}
+    allocator::T
+
+    # The base pointer for the heap we're managing.
+    base::Ptr{Nothing}
+    len::Int
+
+    # Which pool is this?
+    pool::Pool
+
+    # Stats for tracking number of allocations, fragmentation etc.
+    allocations::Int
+    allocated::Int
+
+    # The start to blocks, indexed by their size in the buddy system.
+    freelists::Vector{Block}
+end
+
 # Get the buddy block for a given header.
 # Ptr is a pointer to the block that `header` belongs to.
-function getbuddy(heap, block::Block)
+function getbuddy(heap::BuddyHeap, block::Block)
     # Is this the biggest block that we can allocate?
     # If so, it doesn't have a buddy.
     block.size == binsize(numbins(heap)) && return nothing
@@ -34,20 +52,6 @@ function getbuddy(heap, block::Block)
     else
         return Block(shift + base)
     end
-end
-
-mutable struct BuddyHeap{T}
-    allocator::T
-
-    # The base pointer for the heap we're managing.
-    base::Ptr{Nothing}
-    len::Int
-
-    # Which pool is this?
-    pool::Pool
-
-    # The start to blocks, indexed by their size in the buddy system.
-    freelists::Vector{Block}
 end
 
 Base.sizeof(heap::BuddyHeap) = heap.len
@@ -69,6 +73,8 @@ function BuddyHeap(allocator::T, sz; pool = DRAM, maxallocation = nothing) where
         base,
         sz,
         pool,
+        0,
+        0,
         freelists,
     )
 
@@ -279,6 +285,10 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
         # Set the pool number and zero out the sibling block.
         block.pool = heap.pool
 
+        # Update statistics
+        heap.allocations += 1
+        heap.allocated += binsize(bin)
+
         ptr = pointer(block) + headersize()
         return ptr
     end
@@ -289,7 +299,11 @@ function free(heap::BuddyHeap, ptr::Ptr{Nothing})
     # Get the block from the pointer
     block = unsafe_block(ptr)
 
-    # This block is being evicted - bypass the normal free logic.
+    # Update stats
+    heap.allocations -= 1
+    heap.allocated -= block.size
+
+    # This block is being evicted - bypass returning the block.
     block.evicting && return nothing
 
     block.free = true
@@ -338,7 +352,7 @@ end
 
     # Perfrom the callback on the block ID.
     # After the call back, assume that the block is now ours.
-    cb(block.id)
+    cb(block)
     block.free = true
     return nothing
 end

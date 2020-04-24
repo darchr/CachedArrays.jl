@@ -58,8 +58,6 @@ end
         remotesize = 1_000_000_000
     )
 
-    resize!(manager, 1_000_000_000)
-
     # Run the GC test, then run garbage collection.
     gctest(manager)
     GC.gc(true)

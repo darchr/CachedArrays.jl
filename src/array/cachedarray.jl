@@ -1,5 +1,5 @@
 abstract type AbstractCachedArray{T,N} <: DenseArray{T,N} end
-cacheable(::AbstractCachedArray) = Cacheable()
+metastyle(::AbstractCachedArray) = BlockMeta()
 
 # Must make this mutable so we can attach a finalizer to it, unfortunately.
 mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
@@ -18,11 +18,7 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
             throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
         end
 
-        A = new{T,N,C}(
-            array,
-            manager,
-        )
-
+        A = new{T,N,C}(array, manager)
         register!(A)
         return A
     end
@@ -91,12 +87,15 @@ end
 #####
 
 # Hijack broadcasting so we prioritize CachedArrays.
-const CachedStyle = Broadcast.ArrayStyle{CachedArray}
-
 function Base.BroadcastStyle(::Type{T}) where {T <: AbstractCachedArray}
     return Broadcast.ArrayStyle{strip_params(T)}()
 end
 
+# TODO - right now, we traverse through the BC object to find the first intance of an
+# AbstractCachedArray.
+#
+# A more general solution would gather all such arrays and check that all the CachedArrays
+# are the same.
 function Base.similar(
         bc::Broadcast.Broadcasted{Broadcast.ArrayStyle{T}},
         ::Type{ElType}
@@ -106,6 +105,8 @@ function Base.similar(
     return similar(cached, ElType, axes(bc))
 end
 
+# We need to search through the GC object for the first instance of T
+# Once we find it, return it.
 findT(::Type{T}, bc::Base.Broadcast.Broadcasted) where {T} = findT(T, bc.args)
 findT(::Type{T}, x::Tuple) where {T} = findT(T, findT(T, first(x)), Base.tail(x))
 findT(::Type{T}, x::U) where {T, U <: T} = x

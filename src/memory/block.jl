@@ -45,7 +45,7 @@ struct PoolType{T} end
 #
 # bytes 31..24
 #    The actual allocation size of the block
-struct Block
+struct Block <: AbstractMetadata
     ptr::Ptr{Nothing}
 
     # Inner constructor for ambiguity resolution
@@ -60,19 +60,12 @@ Base.pointer(x::Block) = getfield(x, :ptr)
 datapointer(x::Block) = pointer(x) + headersize()
 isnull(x::Block) = isnull(x.ptr)
 Base.isless(a::Block, b::Block) = a.ptr < b.ptr
+address(x::Block) = convert(UInt, pointer(x))
 
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 
-#####
-##### Can we construct a block from an object?
-#####
-
-struct Cacheable end
-cacheable(x) = nothing
-
-Block(x) = Block(x, cacheable(x))
-Block(x, ::Nothing) = error("Cannot create a block from objects of type $(typeof(x))")
-Block(x, ::Cacheable) = unsafe_block(pointer(x))
+struct BlockMeta end
+metadata(x, ::BlockMeta) = unsafe_block(pointer(x))
 
 # Reserved room in for each allocation.
 headersize() = 64
@@ -173,9 +166,23 @@ function Base.setproperty!(x::Block, name::Symbol, v)
     end
 end
 
-# Convenience Functions
 isfree(x::Block) = x.free
-address(x::Block) = convert(UInt, pointer(x))
+
+#####
+##### Metadata API
+#####
+
+setdirty!(x::Block, flag::Bool) = (x.dirty = flag)
+isdirty(x::Block) = x.dirty
+getid(x::Block) = x.id
+getpool(x::Block) = x.pool
+
+function getsibling(x::Block)
+    sibling = x.sibling
+    return isnull(sibling) ? nothing : sibling
+end
+
+setsibling!(x::Block, y::Block) = (x.sibling = y)
 
 # Helpful Displaying.
 function Base.show(io::IO, block::Block)

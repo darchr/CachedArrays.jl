@@ -179,7 +179,7 @@ end
     # Next step, try this eviction free schenanigans.
     @test CachedArrays.check(heap)
     ids = Int[]
-    CachedArrays.evictfrom!(heap, b0, 6000; cb = id -> push!(ids, id))
+    CachedArrays.evictfrom!(heap, b0, 6000; cb = x -> push!(ids, CachedArrays.getid(x)))
     @test CachedArrays.check(heap)
     # Should have evicted block zero
     @test ids == [0]
@@ -198,7 +198,7 @@ end
 
     ids = Int[]
     b0 = CachedArrays.Block(p0 - CachedArrays.headersize())
-    CachedArrays.evictfrom!(heap, b0, 10000; cb = id -> push!(ids, id))
+    CachedArrays.evictfrom!(heap, b0, 10000; cb = x -> push!(ids, CachedArrays.getid(x)))
 
     # We've eviction should maintain the status of the cache.
     @test CachedArrays.check(heap)
@@ -216,7 +216,7 @@ end
     # Now, evict from p1
     ids = Int[]
     b1 = CachedArrays.Block(p1 - CachedArrays.headersize())
-    CachedArrays.evictfrom!(heap, b1, 10000; cb = id -> push!(ids, id))
+    CachedArrays.evictfrom!(heap, b1, 10000; cb = x -> push!(ids, CachedArrays.getid(x)))
     @test ids == [0, 1]
     p2 = CachedArrays.alloc(heap, 10000, 3)
     @test CachedArrays.check(heap)

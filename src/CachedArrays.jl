@@ -39,12 +39,13 @@ donothing(x...) = nothing
 # Bootstrap Utilities
 include("memkind.jl")
 include("allocators.jl")
+include("metadata.jl")
 
 include("memory/block.jl")
 include("memory/heap.jl")
 
 # Cache eviction policies
-include("policy/lru.jl")
+include("policy/policy.jl")
 
 # Implementation of the arrays and cache manager
 include("manager.jl")

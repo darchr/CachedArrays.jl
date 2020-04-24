@@ -12,6 +12,6 @@ include("memcpy.jl")
 include("policy/lru.jl")
 
 include("manager.jl")
-include("array.jl")
-include("locked.jl")
+include("array/array.jl")
+include("array/locked.jl")
 

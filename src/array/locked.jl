@@ -40,22 +40,6 @@ end
 Base.convert(::Type{LockedCachedArray{T,N}}, x::CachedArray{T,N}) where {T,N} = lock(x)
 
 #####
-##### Broadcast
-#####
-
-# const LockedCachedStyle = Broadcast.ArrayStyle{LockedCachedArray}
-#
-# Base.BroadcastStyle(::Type{<:LockedCachedArray}) = LockedCachedStyle()
-# function Base.similar(
-#         bc::Broadcast.Broadcasted{LockedCachedStyle},
-#         ::Type{ElType}
-#     ) where {ElType}
-#
-#     cached = findcached(LockedCachedArray, bc)
-#     return similar(cached, Eltype, axes(bc))
-# end
-
-#####
 ##### Array API
 #####
 
