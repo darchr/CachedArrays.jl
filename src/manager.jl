@@ -39,7 +39,7 @@ mutable struct CacheManager{C,P,Q}
     gc_before_evict::Bool
 end
 
-function CacheManager{T}(
+function CacheManager(
         path::AbstractString;
         localsize = 1_000_000_000,
         remotesize = 1_000_000_000
@@ -68,7 +68,7 @@ function CacheManager{T}(
     dram_heap = BuddyHeap(AlignedAllocator(), localsize; pool = DRAM)
 
     # Construct the manager.
-    manager = CacheManager{T,typeof(pmm_heap),typeof(dram_heap)}(
+    manager = CacheManager(
         local_objects,
         size_of_local,
         idcount,
@@ -81,6 +81,9 @@ function CacheManager{T}(
         Float32(1),     # flushpercent
         true,           # gc_before_evict
     )
+
+    # Add this to the global manager list to ensure that it outlives any of its users
+    push!(GlobalManagers, manager)
 
     return manager
 end
@@ -109,6 +112,8 @@ function getid(manager::CacheManager)
     manager.idcount += 1
     return id
 end
+
+cangc(manager::CacheManager) = (localsize(manager) == 0) && (remotesize(manager) == 0)
 
 function Base.show(io::IO, M::CacheManager)
     println(io, "Cache Manager")

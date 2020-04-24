@@ -59,24 +59,33 @@ include("lib.jl")
 
 # Global manager for the set of CachedArrays.
 # It's important to keep this concretely typed.
-const ManagerType = CacheManager{LRU{UInt},BuddyHeap{MemKindAllocator},BuddyHeap{AlignedAllocator}}
-const GlobalManager = Ref{ManagerType}()
 
+# When Managers get created - hold them in a global array to keep them from getting
+# GC'd before the arrays they track.
+#
+# We can periodically GC the mangers to see if they are no longer holding onto anything,
+# at which point we're free to reclaim their resources.
+const GlobalManagers = CacheManager[]
 
-function __init__()
-    # Create the global manager.
-    path = get(ENV, "JULIA_PMEM_PATH", @__DIR__)
-    if (path == @__DIR__) && !IS_2LM
-        @warn """
-            Please define the environment variable "JULIA_PMEM_PATH" to point to
-            the location where the PMM file should be located.
+function gc_managers()
+    # Find all the managers that can be garbage collected.
+    #
+    # Trigger a full garbage collection before to clean up anything that may be holding
+    # onto a manager
+    GC.gc(true)
 
-            Otherwise, the file will be created in $(@__DIR__) which is probably not what
-            you want to do, but is fine for testing.
-        """
-    end
-    GlobalManager[] = CacheManager{LRU{UInt}}(path)
+    # Now, find all the managers that have been completely cleaned up.
+    i = findall(cangc, GlobalManagers)
+    isnothing(i) && return 0
+
+    # Remove the managers from this list and then run a full garbage collection to make sure
+    # they're well can completely gone.
+    deleteat!(GlobalManagers, i)
+    GC.gc(true)
+
+    # Return the number of managers we removed
+    return length(i)
 end
 
-
 end # module
+

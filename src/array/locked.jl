@@ -14,21 +14,20 @@ struct LockedCachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     array::CachedArray{T,N,C}
 end
 
-LockedCachedArray(A::Array{T,N}) where {T,N} = lock(CachedArray(A))
+LockedCachedArray(A::Array, manager) = LockedCachedArray(CachedArray(A, manager))
 
-function LockedCachedArray{T}(::UndefInitializer, i::Integer) where {T}
-    return LockedCachedArray{T}(undef, (convert(Int, i),))
+function LockedCachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
+    return LockedCachedArray{T}(undef, manager, (convert(Int, i),))
 end
 
-function LockedCachedArray{T}(::UndefInitializer, dims::NTuple{N,Int}) where {T,N}
+function LockedCachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}) where {T,N}
     # Create the wrapped CachedArray
-    array = CachedArray{T}(undef, dims)
+    array = CachedArray{T}(undef, manager, dims)
     # We're creating it, so ensure that it is dirty.
     return LockedCachedArray(array)
 end
 
-Block(A::LockedCachedArray) = Block(A.array)
-
+strip_params(::Type{<:LockedCachedArray}) = LockedCachedArray
 Base.lock(x::CachedArray) = LockedCachedArray(x)
 Base.lock(x::LockedCachedArray) = x
 
@@ -40,26 +39,21 @@ end
 
 Base.convert(::Type{LockedCachedArray{T,N}}, x::CachedArray{T,N}) where {T,N} = lock(x)
 
-function Base.similar(
-        ::Type{<:LockedCachedArray},
-        ::Type{S},
-        dims::Tuple{Vararg{Int64,N}}
-    ) where {S,N}
-
-    return LockedCachedArray{S}(undef, dims)
-end
-
 #####
-##### Broadcasting
+##### Broadcast
 #####
 
-const LockedStyle = Broadcast.ArrayStyle{LockedCachedArray}
-
-Base.BroadcastStyle(::Type{<:LockedCachedArray}) = LockedStyle()
-function Base.similar(bc::Broadcast.Broadcasted{LockedStyle}, ::Type{ElType}) where {ElType}
-    return similar(LockedCachedArray{ElType}, axes(bc))
-end
-
+# const LockedCachedStyle = Broadcast.ArrayStyle{LockedCachedArray}
+#
+# Base.BroadcastStyle(::Type{<:LockedCachedArray}) = LockedCachedStyle()
+# function Base.similar(
+#         bc::Broadcast.Broadcasted{LockedCachedStyle},
+#         ::Type{ElType}
+#     ) where {ElType}
+#
+#     cached = findcached(LockedCachedArray, bc)
+#     return similar(cached, Eltype, axes(bc))
+# end
 
 #####
 ##### Array API

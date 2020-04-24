@@ -4,7 +4,7 @@ function gctest(manager)
 
     len = 1024
     B = rand(Float32, len)
-    A = CachedArray{Float32}(undef, len)
+    A = CachedArray{Float32}(undef, manager, len)
 
     @test isa(A, CachedArray)
     # Test assignment works
@@ -52,7 +52,12 @@ end
 @testset "Testing Array Correctness" begin
     # Grab ahold of the default manager so we can make sure it gets updated correctly.
     GC.gc(true)
-    manager = CachedArrays.GlobalManager[]
+    manager = CachedArrays.CacheManager(
+        @__DIR__;
+        localsize = 1_000_000_000,
+        remotesize = 1_000_000_000
+    )
+
     resize!(manager, 1_000_000_000)
 
     # Run the GC test, then run garbage collection.
@@ -69,8 +74,8 @@ end
 
         # Okay, now start doing some operations on arrays.
         len = 2_000_000
-        A = CachedArray{Float32}(undef, len)
-        B = CachedArray{Float32}(undef, len)
+        A = CachedArray{Float32}(undef, manager, len)
+        B = CachedArray{Float32}(undef, manager, len)
 
         vA = rand(Float32, len)
         vB = rand(Float32, len)
@@ -94,4 +99,9 @@ end
         @test (@allocated f!(C,A,B)) == 0
     end
 end
+
+@testset "Testing Cleanup" begin
+    @test CachedArrays.gc_managers() == 1
+end
+
 

@@ -37,28 +37,25 @@ manager(x::AbstractCachedArray) = x.manager
 replace!(C::CachedArray{T,N}, A::Array{T,N}) where {T,N} = (C.array = A)
 arraytype(C::CachedArray{T,N}) where {T,N} = Array{T,N}
 
+# utils
+strip_params(::Type{<:CachedArray}) = CachedArray
+strip_params(::T) where {T <: AbstractCachedArray} = strip_params(T)
+
 #####
 ##### Constructors
 #####
 
-function CachedArray{T,N}(x::Array{T,N}, parent, manager::C = GlobalManager[]) where {T,N,C}
+function CachedArray{T,N}(x::Array{T,N}, manager::C) where {T,N,C}
     _x = unsafe_alloc(PoolType{DRAM}(), manager, typeof(x), size(x))
     copyto!(_x, x)
     return CachedArray{T,N,C}(_x, manager)
 end
 
-CachedArray(x::Array{T,N}) where {T,N} = CachedArray{T,N}(x, nothing)
-
-function CachedArray{T}(::UndefInitializer, i::Integer) where {T}
-    return CachedArray{T}(undef, (convert(Int, i),))
+function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
+    return CachedArray{T}(undef, manager, (convert(Int, i),))
 end
 
-function CachedArray{T}(
-        ::UndefInitializer,
-        dims::NTuple{N,Int},
-        manager::C = GlobalManager[],
-    ) where {T,N,C}
-
+function CachedArray{T}(::UndefInitializer, manager::C, dims::NTuple{N,Int}) where {T,N,C}
     array = unsafe_alloc(PoolType{DRAM}(), manager, Array{T,N}, dims)
     A = CachedArray{T,N,C}(array, manager)
     return A
@@ -77,18 +74,13 @@ Base.@propagate_inbounds @inline Base.getindex(A::AbstractCachedArray, i::Int) =
 Base.@propagate_inbounds @inline Base.setindex!(A::AbstractCachedArray, v, i::Int) = setindex!(A.array, v, i)
 Base.IndexStyle(::Type{<:AbstractCachedArray}) = Base.IndexLinear()
 
-# "Similar" variants in all their glory!
-# TODO: Think about how to propagate metadata ...
-function Base.similar(::Type{<:CachedArray}, ::Type{S}, dims::Tuple{Vararg{Int64,N}}) where {S,N}
-    return CachedArray{S}(undef, dims)
-end
+function Base.similar(
+        A::AbstractCachedArray,
+        eltyp::Type{T} = eltype(A),
+        dims::Tuple{Vararg{Int,N}} = size(A)
+   ) where {T,N}
 
-function Base.similar(::Type{A}, dims::Tuple{Vararg{Int64,N}}) where {T,A <: AbstractCachedArray{T},N}
-    return similar(A, T, dims)
-end
-
-function Base.similar(A::AbstractCachedArray, ::Type{S}, dims::Tuple{Vararg{Int64,N}}) where {S,N}
-    return similar(typeof(A), S, dims)
+    strip_params(A){eltyp}(undef, manager(A), dims)
 end
 
 @inline Base.iterate(A::AbstractCachedArray) = iterate(A.array)
@@ -101,8 +93,24 @@ end
 # Hijack broadcasting so we prioritize CachedArrays.
 const CachedStyle = Broadcast.ArrayStyle{CachedArray}
 
-Base.BroadcastStyle(::Type{<:CachedArray}) = CachedStyle()
-function Base.similar(bc::Broadcast.Broadcasted{CachedStyle}, ::Type{ElType}) where {ElType}
-    return similar(CachedArray{ElType}, axes(bc))
+function Base.BroadcastStyle(::Type{T}) where {T <: AbstractCachedArray}
+    return Broadcast.ArrayStyle{strip_params(T)}()
 end
+
+function Base.similar(
+        bc::Broadcast.Broadcasted{Broadcast.ArrayStyle{T}},
+        ::Type{ElType}
+    ) where {T <: AbstractCachedArray, ElType}
+
+    cached = findT(T, bc)
+    return similar(cached, ElType, axes(bc))
+end
+
+findT(::Type{T}, bc::Base.Broadcast.Broadcasted) where {T} = findT(T, bc.args)
+findT(::Type{T}, x::Tuple) where {T} = findT(T, findT(T, first(x)), Base.tail(x))
+findT(::Type{T}, x::U) where {T, U <: T} = x
+findT(::Type{T}, x) where {T} = nothing
+findT(::Type{T}, ::Tuple{}) where {T} = nothing
+findT(::Type{T}, x::U, rest) where {T, U <: T} = x
+findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
 

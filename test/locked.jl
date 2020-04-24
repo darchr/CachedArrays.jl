@@ -1,13 +1,16 @@
 @testset "Testing LockedArrays" begin
     # Create a new manager so old ones don't collide.
-    manager = CachedArrays.CacheManager{CachedArrays.LRU{UInt}}(@__DIR__)
+    manager = CachedArrays.CacheManager(
+        @__DIR__;
+        localsize = 1_000_000_000,
+        remotesize = 1_000_000_000,
+    )
 
     # Make sure everything has been cleaned up from previous runs.
     @test CachedArrays.localsize(manager) == 0
     @test CachedArrays.remotesize(manager) == 0
 
     # Resize the manager pool to something reasonable for testing.
-    resize!(manager, 1_000_000_000)
     len = 2_000_000
 
     DRAM = CachedArrays.DRAM
@@ -15,8 +18,8 @@
 
     # Wrap in an `let` block for GC purposes
     let
-        A = LockedCachedArray{Float32}(undef, len)
-        B = LockedCachedArray{Float32}(undef, len)
+        A = LockedCachedArray{Float32}(undef, manager, len)
+        B = LockedCachedArray{Float32}(undef, manager, len)
 
         vA = rand(Float32, len)
         vB = rand(Float32, len)
