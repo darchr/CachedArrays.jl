@@ -61,9 +61,6 @@ include("array/locked.jl")
 include("memcpy.jl")
 include("lib.jl")
 
-# Global manager for the set of CachedArrays.
-# It's important to keep this concretely typed.
-
 # When Managers get created - hold them in a global array to keep them from getting
 # GC'd before the arrays they track.
 #

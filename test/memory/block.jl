@@ -70,3 +70,8 @@
     @test block.next == b
     @test pointer(block.next) == x
 end
+
+# @testset "Testing Metadata API for Cached-Like Arrays" begin
+#     # Allocate a couple of pointers from the AlignedAllocator. We'll manually set the
+#     # for the header and make sure the assignment for Blocks works.
+# end

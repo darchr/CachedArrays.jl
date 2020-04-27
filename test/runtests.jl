@@ -4,6 +4,8 @@ using Random
 using BenchmarkTools
 
 include("memkind.jl")
+include("allocators.jl")
+
 include("memory/block.jl")
 include("memory/buddyheap.jl")
 

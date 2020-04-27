@@ -28,7 +28,7 @@
     # Allocate and free a pointer a bunch of times, make sure that the heap management
     # is actually working correctly.
     @time for _ in 1:1000
-        ptr = MemKind.malloc(kind, sizeof(Int))
+        ptr = MemKind.malloc(kind, rand(1:1_000_000))
         @test ptr != C_NULL
         MemKind.free(kind, ptr)
     end
