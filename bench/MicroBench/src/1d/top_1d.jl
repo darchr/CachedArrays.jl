@@ -11,8 +11,11 @@ function alloc_1d(manager, totalsize, arraysize)
 
     # Zero initialize the arrays.
     # Important to make sure the OS actually gives us the physical pages.
-    Threads.@threads for A in arrays
-        KernelBenchmarks.sequential_write(A, Val{16}())
+    for A in arrays
+        _A = CachedArrays.unlock(A)
+        Threads.@threads for i in eachindex(_A)
+            _A[i] = zero(eltype(_A))
+        end
     end
     return arrays
 end

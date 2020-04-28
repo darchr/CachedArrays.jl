@@ -38,7 +38,10 @@ end
 function CacheManager(
         path::AbstractString;
         localsize = 1_000_000_000,
-        remotesize = 1_000_000_000
+        remotesize = 1_000_000_000,
+        policy = LRU{Block}(),
+        flushpercent::Float32 = Float32(1),
+        gc_before_evict = false,
     ) where {T}
 
     # If we're in 2LM, pass a nullptr.
@@ -58,7 +61,6 @@ function CacheManager(
     size_of_remote = 0
 
     # Initialize the cache
-    policy = LRU{Block}(localsize)
 
     pmm_heap = BuddyHeap(MemKindAllocator(kind), remotesize; pool = PMM)
     dram_heap = BuddyHeap(AlignedAllocator(), localsize; pool = DRAM)
@@ -74,8 +76,8 @@ function CacheManager(
         pmm_heap,
         dram_heap,
         # tunables,
-        Float32(1),     # flushpercent
-        true,           # gc_before_evict
+        flushpercent,
+        gc_before_evict,
     )
 
     # Add this to the global manager list to ensure that it outlives any of its users
@@ -185,7 +187,7 @@ function unregister!(::PoolType{DRAM}, M::CacheManager, A)
     @check haskey(M.local_objects, getid(block))
 
     delete!(M.local_objects, getid(block))
-    delete!(M.policy, block)
+    in(block, M.policy) && delete!(M.policy, block)
     M.size_of_local -= sizeof(A)
     return nothing
 end
@@ -385,8 +387,12 @@ function doeviction!(manager, allocsize)
     target = ceil(Int, manager.dram_heap.len * manager.flushpercent)
 
     while localsize(manager) >= target
-        block = Block(manager, pop!(manager.policy))
-        evict!(manager.dram_heap, block; cb = cb)
+        block = pop!(manager.policy)
+        @check canallocfrom(manager.dram_heap, block, block.size - headersize())
+
+        # Need to use the more powerful "evictfrom!" since it correctly puts the
+        # heap back together.
+        evictfrom!(manager.dram_heap, block, block.size - headersize(); cb = cb)
     end
 
     return nothing
@@ -406,8 +412,11 @@ function moveto!(::PoolType{DRAM}, A, M = manager(A); dirty = true)
         return nothing
     end
 
+    println("Moving $(getid(block)) to DRAM")
+
     # If this block is NOT in DRAM, then it shouldn't have a sibling.
     @check isnothing(getsibling(block))
+    #println("DEBUG: Moving id $(getid(block)) to DRAM")
 
     # Otherwise, we need to allocate some local data for it.
     storage = unsafe_alloc(PoolType{DRAM}(), M, arraytype(A), size(A), getid(block))
@@ -440,6 +449,8 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
     getpool(block) == PMM && return nothing
     sibling = getsibling(block)
 
+    println("Moving $(getid(block)) to PMM")
+
     # If this block has a sibling and it is clean, we can elide write back.
     # Otherwise, we have to write back.
     createstorage = isnothing(sibling)
@@ -454,10 +465,14 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
         )
     end
 
+    #println("DEBUG: Moving id $(getid(block)) to PMM: Created Storage: $createstorage")
+
     @check getid(sibling) == getid(block)
 
     if isdirty(block) || createstorage
-        memcpy!(storage, A, true)
+        # Since `storage` is just a normal array, we have to manually inform the copy engine
+        # how many threads to use.
+        memcpy!(storage, A; nthreads = min(Threads.nthreads(), 4))
     end
 
     # Deregister this object from local tracking.

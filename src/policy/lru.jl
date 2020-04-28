@@ -19,7 +19,7 @@ mutable struct LRU{T}
     handles::Dict{T,Int}
 end
 
-function LRU{T}(maxsize) where {T}
+function LRU{T}() where {T}
     return LRU(
         0,
         DataStructures.MutableBinaryMinHeap{Priority{T}}(),

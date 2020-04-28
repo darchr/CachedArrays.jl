@@ -16,7 +16,7 @@ function alloc_2d(manager, totalsize, arraysize)
     return arrays
 end
 
-function stepping_square_matrix_mult(arrays::Vector; iterations = 1)
+function matrix_mult_forward(arrays::Vector; iterations = 1)
     for _ in 1:iterations
         @showprogress 1 for i in 1:3:(length(arrays)-2)
             mul!(arrays[i+2], arrays[i], arrays[i+1])
@@ -24,6 +24,25 @@ function stepping_square_matrix_mult(arrays::Vector; iterations = 1)
             # Annotate elements i and i+1 as cheap.
             CachedArrays.cheapevict(arrays[i])
             CachedArrays.cheapevict(arrays[i+1])
+        end
+    end
+end
+
+function matrix_mult_forward_and_back(arrays::Vector; iterations = 1)
+    for _ in 1:iterations
+        @showprogress 1 for i in 1:3:(length(arrays)-2)
+            mul!(arrays[i+2], arrays[i], arrays[i+1])
+
+            # Annotate elements i and i+1 as cheap.
+            CachedArrays.evict!(arrays[i])
+            CachedArrays.evict!(arrays[i+1])
+        end
+        @showprogress 1 for i in (length(arrays)-2):-3:1
+            mul!(arrays[i], arrays[i-2], arrays[i-1])
+
+            # Annotate elements i and i+1 as cheap.
+            CachedArrays.cheapevict(arrays[i-1])
+            CachedArrays.cheapevict(arrays[i-2])
         end
     end
 end

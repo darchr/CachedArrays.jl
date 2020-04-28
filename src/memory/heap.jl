@@ -342,7 +342,7 @@ function canallocfrom(heap::BuddyHeap, block::Block, sz)
     return address(block) - md + bsz <= baseaddress(heap) + sizeof(heap)
 end
 
-@inline function evict!(heap::BuddyHeap, block::Block; cb = donothing)
+@inline function unsafe_evict!(heap::BuddyHeap, block::Block; cb = donothing)
     @check !isfree(block)
 
     # Mark this block as being evicted.
@@ -374,7 +374,7 @@ function evictfrom!(heap::BuddyHeap, block::Block, sz; cb = donothing)
     while address(current) < stopaddress
         # If this block is free, remove it from the freelist.
         # Otherwise, perfrom an eviction.
-        isfree(current) ? remove!(heap, current) : evict!(heap, current; cb = cb)
+        isfree(current) ? remove!(heap, current) : unsafe_evict!(heap, current; cb = cb)
         current = Block(address(current) + current.size)
     end
 

@@ -75,7 +75,6 @@ end
 _isaligned(x::Integer) = iszero(mod(x, 64))
 _isaligned(x::Ptr) = _isaligned(convert(Int, x))
 
-
 # Top level entry point
 #
 #
@@ -93,17 +92,23 @@ LIMITATIONS
 * `dest` and `src` must not alias at all.
 * The base pointers for `dest` and `src` must be 64-byte aligned.
 """
-function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, x...; kw...) where {T}
-    return _memcpy!(dest, src, x...; kw...)
+function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}; kw...) where {T}
+    return _memcpy!(dest, src; kw...)
 end
 
 # Specialize `memcpy` for CachedArrays.
 # TODO: Figure out maximum number of threads for copying from PMM to PMM
-function memcpy!(dest::AbstractCachedArray{T}, src::AbstractArray{T}; kw...) where {T}
-    return _memcpy!(dest, src, pool(dest) == PMM; kw...)
+function memcpy!(dest::AbstractCachedArray{T}, src::AbstractArray{T}; nthreads = nothing) where {T}
+    # Perform standard thread chosing logic
+    if isnothing(nthreads)
+        maxthreads = Threads.nthreads()
+        nthreads = pool(dest) == PMM ? min(maxthreads, 4) : maxthreads
+    end
+
+    return _memcpy!(dest, src; nthreads = nthreads)
 end
 
-function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = false; forcesingle = nothing) where {T}
+function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}; nthreads = nothing) where {T}
     # Do type check
     if !isbitstype(T)
         throw(ArgumentError("Can only memcpy isbits types."))
@@ -114,8 +119,8 @@ function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = fals
         throw(ArgumentError("Source and Destination must have the same lengths."))
     end
 
-    dest_ptr = convert(Ptr{UInt8}, pointer(dest))
-    src_ptr = convert(Ptr{UInt8}, pointer(src))
+    dest_ptr = pointer(dest)
+    src_ptr = pointer(src)
 
     # Do alignment checks
     if !_isaligned(dest_ptr) || !_isaligned(src_ptr)
@@ -124,35 +129,38 @@ function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}, toremote = fals
         return nothing
     end
 
-    if !iszero(mod(convert(Int, dest_ptr), 64))
-        throw(ArgumentError("Destination is not aligned to a cache boundary!"))
+    return _memcpy!(
+        dest_ptr,
+        src_ptr,
+        length(dest);
+        nthreads = isnothing(nthreads) ? Threads.nthreads() : nthreads
+    )
+end
+
+function _memcpy!(dest::Ptr{T}, src::Ptr{T}, len; kw...) where {T}
+    return _memcpy!(
+        convert(Ptr{UInt8}, dest),
+        convert(Ptr{UInt8}, src),
+        sizeof(T) * len;
+        kw...
+    )
+end
+
+function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)
+    # Handle `isnothing` case first.
+    if isnothing(nthreads)
+        unsafe_memcpy!(+, dest, src, bytes)
+        sfence()
+        return nothing
     end
 
-    if !iszero(mod(convert(Int, src_ptr), 64))
-        throw(ArgumentError("Source is not aligned to a cache boundary!"))
-    end
+    # Now, deal with the specified nmber of threads
+    bytes_per_chunk, last_chunk = aligned_chunk(bytes, nthreads)
 
-    @static if THREADED_COPY
-        # Determine if we're moving to the remote array.
-        # Then only use 4 threads.
-        #
-        # Otherwise, use all available threads.
-        if !isnothing(forcesingle)
-            unsafe_memcpy!(+, dest_ptr, src_ptr, sizeof(dest))
-            sfence()
-        else
-            nchunks = toremote ? 4 : Threads.nthreads()
-            bytes_per_chunk, last_chunk = aligned_chunk(sizeof(dest), nchunks)
-
-            Threads.@threads for i in 1:nchunks
-                offset = bytes_per_chunk * (i-1)
-                copybytes = (i == nchunks) ? last_chunk : bytes_per_chunk
-                unsafe_memcpy!(+, dest_ptr + offset, src_ptr + offset, copybytes)
-                sfence()
-            end
-        end
-    else
-        unsafe_memcpy!(+, dest_ptr, src_ptr, sizeof(T) * length(src))
+    Threads.@threads for i in 1:nthreads
+        offset = bytes_per_chunk * (i-1)
+        copybytes = (i == nthreads) ? last_chunk : bytes_per_chunk
+        unsafe_memcpy!(+, dest + offset, src + offset, copybytes)
         sfence()
     end
     return nothing

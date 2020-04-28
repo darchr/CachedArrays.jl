@@ -24,7 +24,7 @@ using ProgressMeter
 using StructArrays
 
 # debug mode enables much smaller kernels that don't exceed the size of the DRAM
-const DEBUG = true
+const DEBUG = false
 
 # Will throw an error if this is not defined
 const IS_2LM = parse(Bool, ENV["JULIA_IS_2LM"])
