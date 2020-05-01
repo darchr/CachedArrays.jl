@@ -55,6 +55,8 @@ function Base.setindex!(::LockedCachedArray, v, i::Int)
     error("Cannot call `setindex!` on a LockedCachedArray. Call `unlock` to mutate")
 end
 
+Base.getindex(A::LockedCachedArray, i::Int) = getindex(A.array, i)
+
 # For functions that globally modify an LockedCachedArray,
 # we call `unlock` on the array.
 # This automatically marks the array as dirty.
@@ -96,7 +98,8 @@ end
 #####
 
 MacroTools.@forward LockedCachedArray.array (
-    id,
+    Base.pointer,
+    Base.size,
     manager,
     evict!,
     shallow_fetch!,

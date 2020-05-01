@@ -44,6 +44,7 @@ donothing(x...) = nothing
 include("memkind.jl")
 include("allocators.jl")
 include("metadata.jl")
+include("loadstore.jl")
 
 include("memory/block.jl")
 include("memory/heap.jl")

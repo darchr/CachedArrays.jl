@@ -5,12 +5,14 @@ metastyle(::AbstractCachedArray) = BlockMeta()
 mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     # This is the underlying data array.
     # When this array is remote, we use `unsafe_wrap` to wrap our own pointer.
-    array::Array{T,N}
+    ptr::Ptr{T}
+    dims::NTuple{N,Int}
     manager::CacheManager
 
     # Inner constructor - do a type chack and make sure the finalizer is attached.
     function CachedArray{T,N,C}(
-            array::Array{T,N},
+            ptr::Ptr{T},
+            dims::NTuple{N,Int},
             manager::C,
         ) where {T,N,C}
 
@@ -18,7 +20,7 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
             throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
         end
 
-        A = new{T,N,C}(array, manager)
+        A = new{T,N,C}(ptr, dims, manager)
         register!(A)
         return A
     end
@@ -28,7 +30,7 @@ end
 ##### `Cacheable` Interface
 #####
 
-Base.pointer(A::AbstractCachedArray) = pointer(A.array)
+Base.pointer(A::AbstractCachedArray) = A.ptr
 
 # We need to put a return type annotation because otherwise, Julia doesn't like
 # inferring this.
@@ -36,13 +38,11 @@ function manager(x::CachedArray{T,N,C})::C where {T,N,C}
     return x.manager
 end
 
-function replace!(C::CachedArray{T,N}, A::Array{T,N}) where {T,N}
-    PEDANTIC && @assert C.array == A
-
-    C.array = A
+function replace!(C::CachedArray{T}, ptr::Ptr{T}) where {T}
+    # TODO: In `pendantic` mode, unsafe wrap both `ptrs` to check equality.
+    C.ptr = ptr
     return nothing
 end
-arraytype(C::CachedArray{T,N}) where {T,N} = Array{T,N}
 
 # utils
 strip_params(::Type{<:CachedArray}) = CachedArray
@@ -53,9 +53,9 @@ strip_params(::T) where {T <: AbstractCachedArray} = strip_params(T)
 #####
 
 function CachedArray{T,N}(x::Array{T,N}, manager::C) where {T,N,C}
-    _x = unsafe_alloc(PoolType{DRAM}(), manager, typeof(x), size(x))
-    copyto!(_x, x)
-    return CachedArray{T,N,C}(_x, manager)
+    ptr = unsafe_alloc(T, PoolType{DRAM}(), manager, typeof(x), size(x))
+    copyto!(ptr, pointer(x), length(x))
+    return CachedArray{T,N,C}(ptr, size(x), manager)
 end
 
 function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
@@ -63,8 +63,8 @@ function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
 end
 
 function CachedArray{T}(::UndefInitializer, manager::C, dims::NTuple{N,Int}) where {T,N,C}
-    array = unsafe_alloc(PoolType{DRAM}(), manager, Array{T,N}, dims)
-    A = CachedArray{T,N,C}(array, manager)
+    ptr = unsafe_alloc(T, PoolType{DRAM}(), manager, prod(dims) * sizeof(T))
+    A = CachedArray{T,N,C}(ptr, dims, manager)
     return A
 end
 
@@ -73,12 +73,19 @@ end
 #####
 
 Base.unsafe_convert(::Type{Ptr{T}}, A::AbstractCachedArray{T}) where {T} = pointer(A)
-@inline Base.size(A::AbstractCachedArray) = size(A.array)
-Base.sizeof(A::AbstractCachedArray) = sizeof(A.array)
+Base.sizeof(A::AbstractCachedArray) = prod(size(A)) * sizeof(eltype(A))
+@inline Base.size(A::AbstractCachedArray) = A.dims
 Base.elsize(::AbstractCachedArray{T}) where {T} = sizeof(T)
 
-Base.@propagate_inbounds @inline Base.getindex(A::AbstractCachedArray, i::Int) = A.array[i]
-Base.@propagate_inbounds @inline Base.setindex!(A::AbstractCachedArray, v, i::Int) = setindex!(A.array, v, i)
+function Base.getindex(A::AbstractCachedArray, i::Int)
+    @boundscheck checkbounds(A, i)
+    return LoadStore.unsafe_custom_load(pointer(A), i)
+end
+function Base.setindex!(A::AbstractCachedArray, v, i::Int)
+    @boundscheck checkbounds(A, i)
+    return LoadStore.unsafe_custom_store!(pointer(A), v, i)
+end
+
 Base.IndexStyle(::Type{<:AbstractCachedArray}) = Base.IndexLinear()
 
 function Base.similar(
@@ -90,8 +97,10 @@ function Base.similar(
     strip_params(A){eltyp}(undef, manager(A), dims)
 end
 
-@inline Base.iterate(A::AbstractCachedArray) = iterate(A.array)
-@inline Base.iterate(A::AbstractCachedArray, i) = iterate(A.array, i)
+function Base.iterate(A::AbstractCachedArray, i::Int = 1)
+    i > length(A) && return nothing
+    return (@inbounds A[i], i+1)
+end
 
 #####
 ##### Broadcasting

@@ -257,39 +257,43 @@ end
 ##### Allocate remote arrays
 #####
 
-function alloc(
-        ::PoolType{PMM},
-        manager::CacheManager,
-        ::Type{Array{T,N}},
-        dims::NTuple{N,Int}
-    ) where {T,N}
+unsafe_alloc(::Type{T}, x...; kw...) where {T} = convert(Ptr{T}, unsafe_alloc(x...; kw...))
 
-    A = unsafe_alloc(PoolType{PMM}(), manager, Array{T,N}, dims)
-    finalizer(A) do x
-        free(manager.pmm_heap, convert(Ptr{Nothing}, pointer(x)))
-    end
-    return A
-end
+# function alloc(
+#         ::PoolType{PMM},
+#         manager::CacheManager,
+#         ::Type{Array{T,N}},
+#         dims::NTuple{N,Int}
+#     ) where {T,N}
+#
+#     A = unsafe_alloc(PoolType{PMM}(), manager, Array{T,N}, dims)
+#     finalizer(A) do x
+#         free(manager.pmm_heap, convert(Ptr{Nothing}, pointer(x)))
+#     end
+#     return A
+# end
 
 # Remote alloc without a finalizer
 function unsafe_alloc(
         ::PoolType{PMM},
         manager::CacheManager,
-        ::Type{Array{T,N}},
-        dims::NTuple{N,Int},
+        bytes,
         id::UInt = getid(manager),
     ) where {T,N}
 
-    allocsize = sizeof(T) * prod(dims)
-    ptr = alloc(manager.pmm_heap, allocsize, id)
+    ptr = alloc(manager.pmm_heap, bytes, id)
 
     # If we still don't have anything, run a full GC.
     if isnothing(ptr)
         GC.gc(true)
-        ptr = alloc(manager.pmm_heap, allocsize)
+        ptr = alloc(manager.pmm_heap, bytes, id)
     end
 
-    return unsafe_wrap(Array, convert(Ptr{T}, ptr), dims; own = false)
+    if isnothing(ptr)
+        error("Cannot Allocate from PMM")
+    end
+
+    return ptr
 end
 
 #####
@@ -304,49 +308,45 @@ end
 #
 #         Do that free operation.
 
-function alloc(
-        ::PoolType{DRAM},
-        manager::CacheManager,
-        ::Type{Array{T,N}},
-        dims::NTuple{N,Int}
-    ) where {T,N}
-
-    A = unsafe_alloc(PoolType{DRAM}(), manager, Array{T,N}, dims)
-    finalizer(A) do x
-        free(manager.dram_heap, convert(Ptr{Nothing}, pointer(x)))
-    end
-    return A
-end
+# function alloc(
+#         ::PoolType{DRAM},
+#         manager::CacheManager,
+#         ::Type{Array{T,N}},
+#         dims::NTuple{N,Int}
+#     ) where {T,N}
+#
+#     A = unsafe_alloc(PoolType{DRAM}(), manager, Array{T,N}, dims)
+#     finalizer(A) do x
+#         free(manager.dram_heap, convert(Ptr{Nothing}, pointer(x)))
+#     end
+#     return A
+# end
 
 function unsafe_alloc(
         ::PoolType{DRAM},
         manager::CacheManager,
-        ::Type{Array{T,N}},
-        dims::NTuple{N,Int},
+        bytes,
         id::UInt = getid(manager),
-    ) where {T,N}
+    )
 
-    allocsize = sizeof(T) * prod(dims)
-    ptr = alloc(manager.dram_heap, allocsize, id)
+    ptr = alloc(manager.dram_heap, bytes, id)
 
     # If allocation failed, try a GC
     if manager.gc_before_evict && isnothing(ptr)
         GC.gc(true)
-        ptr = alloc(manager.dram_heap, allocsize, id)
+        ptr = alloc(manager.dram_heap, bytes, id)
     end
 
     if isnothing(ptr)
-        doeviction!(manager, allocsize)
-        ptr = alloc(manager.dram_heap, allocsize, id)
+        doeviction!(manager, bytes)
+        ptr = alloc(manager.dram_heap, bytes, id)
     end
 
     if isnothing(ptr)
         error("Something's gone horribly wrong!")
     end
 
-    ptr = convert(Ptr{T}, ptr)
-    A = unsafe_wrap(Array, ptr, dims; own = false)
-    return A
+    return ptr
 end
 
 free_convert(x::Array) = pointer(x)
@@ -357,7 +357,7 @@ free(pool, manager::CacheManager, x) = free(pool, manager, free_convert(x))
 free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.dram_heap, ptr)
 free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.pmm_heap, ptr)
 
-function doeviction!(manager, allocsize)
+function doeviction!(manager, bytes)
     # The full storage storage types for policies may contain
     # extra metadata.
     stack = fulleltype(manager.policy)[]
@@ -371,9 +371,7 @@ function doeviction!(manager, allocsize)
         push!(stack, fullpop!(manager.policy))
         block = getval(Block, last(stack))
 
-        # Repeat until we get a block that will allow us to do this allocation.
-        canallocfrom(manager.dram_heap, block, allocsize) && break
-
+        canallocfrom(manager.dram_heap, block, bytes) && break
         if isempty(manager.policy)
             display(stack)
         end
@@ -385,7 +383,7 @@ function doeviction!(manager, allocsize)
     end
 
     # Perform our managed eviction.
-    evictfrom!(manager.dram_heap, block, allocsize; cb = cb)
+    evictfrom!(manager.dram_heap, block, bytes; cb = cb)
 
     # Now that we've guarenteed that we have a block available in our requested size,
     # Clean up items from the cache.
@@ -427,21 +425,27 @@ function moveto!(
     @check isnothing(getsibling(block))
 
     # Otherwise, we need to allocate some local data for it.
-    storage = unsafe_alloc(PoolType{DRAM}(), M, arraytype(A), size(A), getid(block))
+    storage_ptr = unsafe_alloc(
+        eltype(A),
+        PoolType{DRAM}(),
+        M,
+        sizeof(A),
+        getid(block),
+    )
 
     # If we're assured that we're doing a write before a read, then we can avoid
     # copying over the the remote storage
     if !write_before_read
-        memcpy!(storage, A)
+        _memcpy!(storage_ptr, pointer(A), length(A))
     end
 
     # Get the block for the newly created Array.
     # Here, we have to maintain some metadata.
-    newblock = unsafe_block(pointer(storage))
+    newblock = unsafe_block(storage_ptr)
 
     setsibling!(newblock, block)
     setsibling!(block, newblock)
-    replace!(A, storage)
+    replace!(A, storage_ptr)
 
     # Track this object
     register!(PoolType{DRAM}(), M, A)
@@ -467,27 +471,24 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
     # Otherwise, we have to write back.
     createstorage = isnothing(sibling)
     if createstorage
-        storage = unsafe_alloc(PoolType{PMM}(), M, arraytype(A), size(A), getid(block))
-        sibling = unsafe_block(pointer(storage))
+        storage_ptr = unsafe_alloc(eltype(A), PoolType{PMM}(), M, sizeof(A), getid(block))
+        sibling = unsafe_block(storage_ptr)
     else
-        storage = unsafe_wrap(
-            arraytype(A),
-            convert(Ptr{eltype(A)}, datapointer(sibling)),
-            size(A),
-        )
+        storage_ptr = convert(Ptr{eltype(A)}, datapointer(sibling))
     end
 
     @check getid(sibling) == getid(block)
 
     if isdirty(block) || createstorage
-        # Since `storage` is just a normal array, we have to manually inform the copy engine
+        # Since `storage_ptr` is just a pointer,, we have to manually inform the copy engine
         # how many threads to use.
-        memcpy!(storage, A; nthreads = min(Threads.nthreads(), 4))
+        nthreads = min(Threads.nthreads(), 4)
+        _memcpy!(storage_ptr, pointer(A), length(A); nthreads = nthreads)
     end
 
     # Deregister this object from local tracking.
     unregister!(PoolType{DRAM}(), M, A)
-    replace!(A, storage)
+    replace!(A, storage_ptr)
 
     # Free the block we just removed.
     free(PoolType{DRAM}(), M, block)
