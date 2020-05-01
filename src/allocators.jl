@@ -1,5 +1,5 @@
 # Bottom Allocator types.
-abstract type  AbstractAllocator end
+abstract type AbstractAllocator end
 
 #####
 ##### Allocate through LibMemKind

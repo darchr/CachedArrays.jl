@@ -304,7 +304,81 @@ function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
 
     f = () -> sequential_zero(arrays; iterations = iterations)
     runner(f, params; force = true)
+
+    # # Sequential Bump
+    # params = BenchmarkParameters(;
+    #     arraydims = size(first(arrays)),
+    #     totalsize = sum(sizeof, arrays),
+    #     flushpercent = flushpercent,
+    #     eviction_policy = _evict_string(eviction_policy),
+    #     # Sample twice per second
+    #     sampletime = Millisecond(500),
+    #     description = "Sequential Bump",
+    #     kernel = string(sequential_bump),
+    #     iterations = iterations,
+    #     mode = mode,
+    #     num_threads = length(default_cpuset())
+    # )
+
+    # f = () -> sequential_bump(arrays)
+    # runner(f, params; force = true)
     return nothing
+end
+
+function alloc_tests(totalsize, arraysize, flushpercent, eviction_policy)
+    # if in 2LM mode, all of the temporary arrays should go into local memory
+    if IS_2LM
+        # Round up for headroom
+        localsize = round(Int, totalsize * 1.5)
+        remotesize = 4096
+    # Size local mamory to be a little smaller than the DRAM cache to allow for other
+    # program activities that don't belong to our heap.
+    else
+        localsize = DEBUG ? totalsize >> 1 : 180_000_000_000
+        remotesize = DEBUG ? 2 * totalsize : 500_000_000_000
+    end
+
+    manager = CachedArrays.CacheManager(
+        ENV["JULIA_PMEM_PATH"];
+        localsize = localsize,
+        remotesize = remotesize,
+        # Setup tunables
+        policy = eviction_policy,
+        flushpercent = convert(Float32, flushpercent),
+        gc_before_evict = true,
+    )
+
+    mode = IS_2LM ?  "2LM" : "1LM"
+
+    # If we have a small total size, do more iterations.
+    if totalsize < 180_000_000_000
+        iterations = 4
+    else
+        iterations = 1
+    end
+
+    numelements = div(arraysize, sizeof(Float32))
+
+    # Sequential zero
+    params = BenchmarkParameters(;
+        arraydims = (numelements,),
+        totalsize = totalsize,
+        flushpercent = flushpercent,
+        eviction_policy = _evict_string(eviction_policy),
+        # Sample twice per second
+        sampletime = Millisecond(500),
+        description = "Alloc and Free",
+        kernel = string(alloc_and_dealloc),
+        iterations = iterations,
+        mode = mode,
+        num_threads = length(default_cpuset())
+    )
+
+    f = () -> alloc_and_dealloc(manager, totalsize, arraysize)
+
+    # Run once to warm up.
+    @show f()
+    runner(f, params; force = true)
 end
 
 function tests_2d(totalsize, arraysize, flushpercent, eviction_policy)

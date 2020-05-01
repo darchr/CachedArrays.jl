@@ -23,6 +23,7 @@ const THREADED_COPY = true
 _boolparse(x::Bool) = x
 _boolparse(x::String) = parse(Bool, x)
 const IS_2LM = _boolparse(get(ENV, "JULIA_IS_2LM", false))
+#const IS_2LM = true
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.

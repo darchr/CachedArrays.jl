@@ -20,6 +20,10 @@ mutable struct CacheManager{C,P,Q}
     pmm_heap::P
     dram_heap::Q
 
+    # Keep track of objects that we've force freed.
+    # If they get finalized, don't do any freeing.
+    #force_freed::Set{UInt}
+
     ## local tunables
 
     # We trigger a full GC before trying to evict items from the local cache.
@@ -115,6 +119,7 @@ id(A) = getid(metadata(A))
 pool(A) = getpool(metadata(A))
 
 prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
+shallow_fetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
 evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
 
 manager(x) = error("Implement `manager` for $(typeof(x))")
@@ -402,7 +407,13 @@ end
 ##### Moving Objects
 #####
 
-function moveto!(::PoolType{DRAM}, A, M = manager(A); dirty = true)
+function moveto!(
+        ::PoolType{DRAM},
+        A,
+        M = manager(A);
+        dirty = true,
+        write_before_read = false
+    )
     # Get the metadata for this object.
     block = metadata(A)
 
@@ -412,15 +423,17 @@ function moveto!(::PoolType{DRAM}, A, M = manager(A); dirty = true)
         return nothing
     end
 
-    println("Moving $(getid(block)) to DRAM")
-
     # If this block is NOT in DRAM, then it shouldn't have a sibling.
     @check isnothing(getsibling(block))
-    #println("DEBUG: Moving id $(getid(block)) to DRAM")
 
     # Otherwise, we need to allocate some local data for it.
     storage = unsafe_alloc(PoolType{DRAM}(), M, arraytype(A), size(A), getid(block))
-    memcpy!(storage, A)
+
+    # If we're assured that we're doing a write before a read, then we can avoid
+    # copying over the the remote storage
+    if !write_before_read
+        memcpy!(storage, A)
+    end
 
     # Get the block for the newly created Array.
     # Here, we have to maintain some metadata.
@@ -434,7 +447,8 @@ function moveto!(::PoolType{DRAM}, A, M = manager(A); dirty = true)
     register!(PoolType{DRAM}(), M, A)
 
     # Set the dirty flag.
-    setdirty!(newblock, dirty)
+    # If `write_before_read` is true, then we MUST mark this block as dirty.
+    setdirty!(newblock, write_before_read | dirty)
     return nothing
 end
 
@@ -449,8 +463,6 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
     getpool(block) == PMM && return nothing
     sibling = getsibling(block)
 
-    println("Moving $(getid(block)) to PMM")
-
     # If this block has a sibling and it is clean, we can elide write back.
     # Otherwise, we have to write back.
     createstorage = isnothing(sibling)
@@ -464,8 +476,6 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
             size(A),
         )
     end
-
-    #println("DEBUG: Moving id $(getid(block)) to PMM: Created Storage: $createstorage")
 
     @check getid(sibling) == getid(block)
 
