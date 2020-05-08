@@ -102,6 +102,9 @@ function Base.iterate(A::AbstractCachedArray, i::Int = 1)
     return (@inbounds A[i], i+1)
 end
 
+# For alias detection
+Base.dataids(A::AbstractCachedArray) = (UInt(pointer(A)),)
+
 #####
 ##### Broadcasting
 #####
