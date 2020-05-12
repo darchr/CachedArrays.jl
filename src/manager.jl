@@ -66,8 +66,8 @@ function CacheManager(
 
     # Initialize the cache
 
-    pmm_heap = BuddyHeap(MemKindAllocator(kind), remotesize; pool = PMM)
-    dram_heap = BuddyHeap(AlignedAllocator(), localsize; pool = DRAM)
+    pmm_heap = Heap(Buddy(), MemKindAllocator(kind), remotesize; pool = PMM)
+    dram_heap = Heap(Buddy(), AlignedAllocator(), localsize; pool = DRAM)
 
     # Construct the manager.
     manager = CacheManager(

@@ -1,8 +1,8 @@
-@testset "Testing Custom BuddyHeap Manager" begin
+@testset "Testing Custom Heap{Buddy} Manager" begin
     # Start with a small heap for our experiments.
     allocator = CachedArrays.AlignedAllocator()
     len = 2^20
-    heap = CachedArrays.BuddyHeap(allocator, len)
+    heap = CachedArrays.Heap(CachedArrays.Buddy(), allocator, len)
 
     # We should have 1 bin that is 2^20 bytes large.
     num_bins = length(heap.freelists)
@@ -67,7 +67,7 @@
 
     # Try a pretty gnalry allocation test.
     len = 2^20
-    heap = CachedArrays.BuddyHeap(allocator, len)
+    heap = CachedArrays.Heap(CachedArrays.Buddy(), allocator, len)
     @show CachedArrays.slowlength(heap)
 
     numtests = 10000
@@ -137,7 +137,7 @@ end
     #   8192       8192       8192       8192
     # 4096 4096  4096 4096  4096 4096  4096 4096
     allocator = CachedArrays.AlignedAllocator()
-    heap = CachedArrays.BuddyHeap(allocator, 4096 * 8)
+    heap = CachedArrays.Heap(CachedArrays.Buddy(), allocator, 4096 * 8)
 
     # Allocate a 4096 byte chunk and a 8192 byte chunk.
     function doallocation(heap)
