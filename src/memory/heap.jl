@@ -12,6 +12,108 @@ isnull(x::UInt) = iszero(x)
 const MIN_ALLOCATION = 4096
 const LOG2_MIN_ALLOCATION = ceil(Int, log2(MIN_ALLOCATION))
 
+#####
+##### Freelists
+#####
+
+# Parameterize the freelist for testing purposts.
+# Expected api:
+#      .next
+#      .previous
+#      address
+#      isnull
+mutable struct Freelist{T}
+    base::T
+end
+
+Freelist{T}() where {T} = Freelist(T())
+
+function Base.length(x::Freelist)
+    count = 0
+    block = x.base
+    while !isnull(block)
+        count += 1
+        block = block.next
+    end
+
+    return count
+end
+
+Base.isempty(x::Freelist) = isnull(x.base)
+
+function Base.pop!(x::Freelist)
+    # Pull out the base
+    block = x.base
+
+    # Set the base block to the next block
+    # If this hasn't emptied the freelist, null out the previous field
+    x.base = x.next
+    if !isempty(x)
+        x.base.previous = Block()
+    end
+    block.next = Block()
+    return block
+end
+
+function Base.push!(x::Freelist, block::Block)
+    if isempty(x)
+        block.next = Block()
+        block.previous = Block()
+        x.base = block
+    else
+        @check isnull(x.base.previous)
+        x.base.previous = block
+        block.next = x.base
+        x.base = block
+    end
+    return x
+end
+
+function swap!(a::Block, b::Block)
+    @check a.next == b
+
+    b.previous = a.previous
+    a.next = b.next
+    b.next = a
+    a.previous = b
+    return nothing
+end
+
+# Sort the freelist by some parameter
+# uses a simple bubble sort - so probably not that fast.
+function sort!(x::Freelist; lt = (x,y) -> address(x) < address(y))
+    isempty(x) && return nothing
+
+    while true
+        swapped = false
+        block = x.base
+
+        next = block.next
+        while !isnull(next)
+            if lt(next, block)
+                # Implicitly updates `block`.
+                swap!(block, next)
+                swapped = true
+            else
+                block = next
+            end
+        end
+
+        # If we haven't updated anything, then we're done.
+        swapped || break
+    end
+    return nothing
+end
+
+function Base.iterate(x::Freelist, block = x.base)
+    isnull(block) && return nothing
+    return (block, block.next)
+end
+
+#####
+##### Heap
+#####
+
 getbin(sz) = ceil(Int, log2(sz)) - LOG2_MIN_ALLOCATION + 1
 getbin(block::Block) = getbin(block.size)
 binsize(i) = MIN_ALLOCATION * 2^(i-1)
