@@ -46,9 +46,8 @@ include("allocators.jl")
 include("metadata.jl")
 include("loadstore.jl")
 
-include("memory/block.jl")
-include("memory/freelist.jl")
-include("memory/heap.jl")
+# Heap implementations
+include("memory/memory.jl")
 
 # Cache eviction policies
 include("policy/policy.jl")
