@@ -13,104 +13,6 @@ const MIN_ALLOCATION = 4096
 const LOG2_MIN_ALLOCATION = ceil(Int, log2(MIN_ALLOCATION))
 
 #####
-##### Freelists
-#####
-
-# Parameterize the freelist for testing purposts.
-# Expected api:
-#      .next
-#      .previous
-#      address
-#      isnull
-mutable struct Freelist{T}
-    base::T
-end
-
-Freelist{T}() where {T} = Freelist(T())
-
-function Base.length(x::Freelist)
-    count = 0
-    block = x.base
-    while !isnull(block)
-        count += 1
-        block = block.next
-    end
-
-    return count
-end
-
-Base.isempty(x::Freelist) = isnull(x.base)
-
-function Base.pop!(x::Freelist)
-    # Pull out the base
-    block = x.base
-
-    # Set the base block to the next block
-    # If this hasn't emptied the freelist, null out the previous field
-    x.base = x.next
-    if !isempty(x)
-        x.base.previous = Block()
-    end
-    block.next = Block()
-    return block
-end
-
-function Base.push!(x::Freelist, block::Block)
-    if isempty(x)
-        block.next = Block()
-        block.previous = Block()
-        x.base = block
-    else
-        @check isnull(x.base.previous)
-        x.base.previous = block
-        block.next = x.base
-        x.base = block
-    end
-    return x
-end
-
-function swap!(a::Block, b::Block)
-    @check a.next == b
-
-    b.previous = a.previous
-    a.next = b.next
-    b.next = a
-    a.previous = b
-    return nothing
-end
-
-# Sort the freelist by some parameter
-# uses a simple bubble sort - so probably not that fast.
-function sort!(x::Freelist; lt = (x,y) -> address(x) < address(y))
-    isempty(x) && return nothing
-
-    while true
-        swapped = false
-        block = x.base
-
-        next = block.next
-        while !isnull(next)
-            if lt(next, block)
-                # Implicitly updates `block`.
-                swap!(block, next)
-                swapped = true
-            else
-                block = next
-            end
-        end
-
-        # If we haven't updated anything, then we're done.
-        swapped || break
-    end
-    return nothing
-end
-
-function Base.iterate(x::Freelist, block = x.base)
-    isnull(block) && return nothing
-    return (block, block.next)
-end
-
-#####
 ##### Heap
 #####
 
@@ -138,7 +40,7 @@ mutable struct Heap{S <: AbstractHeapStyle,T}
     allocated::Int
 
     # The start to blocks, indexed by their size in the buddy system.
-    freelists::Vector{Block}
+    freelists::Vector{Freelist{Block}}
 end
 
 # Get the buddy block for a given header.
@@ -180,7 +82,7 @@ function Heap(
     # Initialize the freelists.
     # First - figure out how many bins we need.
     maxbin = getbin(sz)
-    freelists = [Block() for _ in 1:maxbin]
+    freelists = [Freelist{Block}() for _ in 1:maxbin]
 
     heap = Heap{S,T}(
         style,
@@ -253,53 +155,22 @@ function push_freelist!(heap::Heap, block::Block)
     @check isfree(block)
 
     bin = getbin(block.size)
-    base = heap.freelists[bin]
-    # No entries in this list
-    if isnull(base)
-        block.next = Block()
-    # Insert this block at the front of the freelist.
-    else
-        @check isnull(base.previous)
-        base.previous = block
-        block.next = base
-    end
-
-    # Null out the `previous` field of this header.
-    block.previous = Block()
-    heap.freelists[bin] = block
+    push!(heap.freelists[bin], block)
     return nothing
 end
 
 
 # Functions for managing the double-linked free lists.
 function remove!(heap::Heap, block::Block)
-    # In this case, we need to pop the block from the freelist
-    # since it's the first one.
-    if isnull(block.previous)
-        bin = getbin(block.size)
-        heap.freelists[bin] = block.next
-    else
-        block.previous.next = block.next
-    end
-
-    if !isnull(block.next)
-        block.next.previous = block.previous
-    end
-    # Temporarily clear out next and previous fields.
-    block.next = Block()
-    block.previous = Block()
+    bin = getbin(block.size)
+    remove!(heap.freelists[bin], block)
     return nothing
 end
 
 function split!(heap::Heap{Buddy}, block::Block)
     @check block.free
 
-    # Split a block into two blocks half the size.
-    #
-    # Step 1: Remove this block from the freelist for this size bucket.
-    remove!(heap, block)
-
-    # Step 2: Split the block in half.
+    # Split the block in half.
     newsize = block.size >> 1
     block.size = newsize
 
@@ -308,33 +179,30 @@ function split!(heap::Heap{Buddy}, block::Block)
     # `block` has a buddy.
     buddy = getbuddy(heap, block)::Block
 
-    block.next = buddy
-
     buddy.size = newsize
     buddy.free = true
     buddy.next = Block()
-    buddy.previous = block
+    buddy.previous = Block()
 
-    # Tack this onto the end of the next level freelist
     return block, buddy
 end
 
 # Pop a block off the free list for the given bin.
 # If no blocks are available, will recurse one level up and split.
 function pop_freelist!(heap::Heap{Buddy}, bin)
-    block = heap.freelists[bin]
+    freelist = heap.freelists[bin]
 
     # If we've reached the top of the chain and we have no blocks available,
     # we've reached a dead end!
-    if bin == numbins(heap) && isnull(block)
+    if bin == numbins(heap) && isempty(freelist)
         return nothing
     end
 
-    if isnull(block)
+    if isempty(freelist)
         # Could use recursion, but do this to avoid unnecessary stack growth.
         # Find the first non-null block
         range = bin+1:numbins(heap)
-        i = findfirst(x -> !isnull(heap.freelists[x]), range)
+        i = findfirst(x -> !isempty(heap.freelists[x]), range)
         isnothing(i) && return nothing
         index = range[i]
 
@@ -344,14 +212,9 @@ function pop_freelist!(heap::Heap{Buddy}, bin)
             block, buddy = split!(heap, block)
             push_freelist!(heap, buddy)
         end
-        block.next = buddy
+    else
+        block = pop!(freelist)
     end
-
-    # Okay, now we have a block, simply clear out its successor and return it.
-    if !isnull(block.next)
-        block.next.previous = Block()
-    end
-    heap.freelists[bin] = block.next
 
     return block
 end
@@ -507,15 +370,7 @@ end
 ##### Utility Checking Functions.
 #####
 
-function freelist_length(heap::Heap{Buddy}, bin)
-    block = heap.freelists[bin]
-    count = 0
-    while !isnull(block)
-        count += 1
-        block = block.next
-    end
-    return count
-end
+freelist_length(heap::Heap{Buddy}, bin) = length(heap.freelists[bin])
 
 function zerocheck(heap::Heap{Buddy}, verbose = false)
     for (i, block) in enumerate(heap)

@@ -19,7 +19,7 @@
     @test isnothing(CachedArrays.getbuddy(heap, block))
 
     # Now, split this bin
-    a, b = CachedArrays.split!(heap, heap.freelists[num_bins])
+    a, b = CachedArrays.split!(heap, pop!(heap.freelists[num_bins]))
     CachedArrays.push_freelist!(heap, b)
     CachedArrays.push_freelist!(heap, a)
 
@@ -73,6 +73,7 @@
     numtests = 10000
     pointers = Set{Ptr{Nothing}}()
     Random.seed!(123)
+
     for test in 1:3
         @time for _ in 1:numtests
             # CHange ratios of allocations to frees.

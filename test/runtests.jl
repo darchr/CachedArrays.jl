@@ -7,6 +7,7 @@ include("memkind.jl")
 include("allocators.jl")
 
 include("memory/block.jl")
+include("memory/freelist.jl")
 include("memory/buddyheap.jl")
 
 include("memcpy.jl")

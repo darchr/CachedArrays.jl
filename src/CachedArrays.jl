@@ -15,7 +15,7 @@ import MacroTools
 const DEBUG = get(ENV, "JULIA_CACHEDARRAYS_DEBUG", true)
 
 # Check ALL array updates for correctness.
-const PEDANTIC = false
+const PEDANTIC = false      # TODO: Currently Broken
 const THREADED_COPY = true
 
 # Flag to indicate if we're in 2LM.
@@ -47,6 +47,7 @@ include("metadata.jl")
 include("loadstore.jl")
 
 include("memory/block.jl")
+include("memory/freelist.jl")
 include("memory/heap.jl")
 
 # Cache eviction policies
