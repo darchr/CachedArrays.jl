@@ -12,7 +12,7 @@
         @test CachedArrays.freelist_length(heap, i) == 0
     end
     @test CachedArrays.freelist_length(heap, num_bins) == 1
-    @test CachedArrays.slowlength(heap) == 1
+    @test length(heap) == 1
 
     # Make sure that this block does not have a buddy
     block = first(heap)
@@ -28,7 +28,7 @@
 
     @test CachedArrays.freelist_length(heap, num_bins) == 0
     @test CachedArrays.freelist_length(heap, num_bins - 1) == 2
-    @test CachedArrays.slowlength(heap) == 2
+    @test length(heap) == 2
 
     # This should fail the buddy check since we have two buddy blocks that are both free.
     @test !CachedArrays.buddycheck(heap)
@@ -36,17 +36,17 @@
     # Test merging logic
     block = CachedArrays.pop_freelist!(heap, num_bins - 1)
     @test CachedArrays.freelist_length(heap, num_bins - 1) == 1
-    @test CachedArrays.slowlength(heap) == 2
+    @test length(heap) == 2
 
     CachedArrays.putback!(heap, block)
     @test CachedArrays.freelist_length(heap, num_bins - 1) == 0
     @test CachedArrays.freelist_length(heap, num_bins) == 1
-    @test CachedArrays.slowlength(heap) == 1
+    @test length(heap) == 1
 
     # Now, for something tricky, try to grab an item from the lowest bin.
     block = CachedArrays.pop_freelist!(heap, 1)
-    @show CachedArrays.slowlength(heap)
-    @test CachedArrays.slowlength(heap) == num_bins
+    @show length(heap)
+    @test length(heap) == num_bins
     for i in 1:num_bins - 1
         @test CachedArrays.freelist_length(heap, i) == 1
     end
@@ -61,14 +61,14 @@
 
     # If we return this block back, we should end up with just a single slab again.
     CachedArrays.putback!(heap, block)
-    @test CachedArrays.slowlength(heap) == 1
+    @test length(heap) == 1
     @test first(heap).size == heap.len
     @test CachedArrays.check(heap)
 
     # Try a pretty gnalry allocation test.
     len = 2^20
     heap = CachedArrays.BuddyHeap(allocator, len)
-    @show CachedArrays.slowlength(heap)
+    @show length(heap)
 
     numtests = 10000
     pointers = Set{Ptr{Nothing}}()
@@ -127,7 +127,7 @@
         CachedArrays.free(heap, ptr)
     end
     @test CachedArrays.check(heap)
-    @test CachedArrays.slowlength(heap) == 1
+    @test length(heap) == 1
 end
 
 @testset "Testing Eviciton" begin
@@ -142,7 +142,7 @@ end
 
     # Allocate a 4096 byte chunk and a 8192 byte chunk.
     function doallocation(heap)
-        @test CachedArrays.slowlength(heap) == 1
+        @test length(heap) == 1
         p0 = CachedArrays.alloc(heap, 3000, 0)
         p1 = CachedArrays.alloc(heap, 6000, 1)
         return (p0, p1)

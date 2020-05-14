@@ -1,8 +1,3 @@
-# A buddy-based heap allocator.
-# All allocations supplied by this allocator are aligned to 64B
-# We use a 64B header and footer to store metadata.
-isnull(x::Ptr) = isnull(convert(UInt, x))
-isnull(x::UInt) = iszero(x)
 
 #####
 ##### Tunable Parameters
@@ -20,7 +15,7 @@ getbin(sz) = ceil(Int, log2(sz)) - LOG2_MIN_ALLOCATION + 1
 getbin(block::Block) = getbin(block.size)
 binsize(i) = MIN_ALLOCATION * 2^(i-1)
 
-mutable struct BuddyHeap{T}
+mutable struct BuddyHeap{T} <: AbstractHeap
     allocator::T
 
     # The base pointer for the heap we're managing.
@@ -37,6 +32,8 @@ mutable struct BuddyHeap{T}
     # The start to blocks, indexed by their size in the buddy system.
     freelists::Vector{Freelist{Block}}
 end
+
+basepointer(heap::BuddyHeap) = heap.base
 
 # Get the buddy block for a given header.
 # Ptr is a pointer to the block that `header` belongs to.
@@ -120,27 +117,6 @@ function BuddyHeap(
     return heap
 end
 
-# Implement a function to iterate through the whole heap.
-function Base.iterate(heap::BuddyHeap)
-    block = Block(heap.base)
-    return (block, block)
-end
-function Base.iterate(heap::BuddyHeap, block::Block)
-    if pointer(block) + block.size >= heap.base + sizeof(heap)
-        return nothing
-    end
-    block = Block(pointer(block) + block.size)
-    return (block, block)
-end
-
-function slowlength(heap::BuddyHeap)
-    count = 0
-    for block in heap
-        count += 1
-    end
-    return count
-end
-
 # Push an item onto the free list.
 function push_freelist!(heap::BuddyHeap, block::Block)
     # Get the header for this block - check what bin it should be in.
@@ -151,7 +127,6 @@ function push_freelist!(heap::BuddyHeap, block::Block)
     push!(heap.freelists[bin], block)
     return nothing
 end
-
 
 # Functions for managing the double-linked free lists.
 function remove!(heap::BuddyHeap, block::Block)
@@ -237,7 +212,7 @@ end
 ##### High Level API
 #####
 
-function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
+function alloc(heap::BuddyHeap, bytes::Integer, id::UInt)
     iszero(bytes) && return nothing
 
     # Determine what bin this belongs to.
@@ -250,7 +225,7 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
         # Mark this block as used
         block.free = false
         block.evicting = false
-        !isnothing(id) && (block.id = id)
+        block.id = id
 
         # Configure metadata
         # Set the pool number and zero out the sibling block.
@@ -265,7 +240,6 @@ function alloc(heap::BuddyHeap, bytes::Integer, id = nothing)
     end
 end
 
-free(heap::BuddyHeap, ptr::Ptr) = free(heap, convert(Ptr{Nothing}, ptr))
 function free(heap::BuddyHeap, ptr::Ptr{Nothing})
     # Get the block from the pointer
     block = unsafe_block(ptr)

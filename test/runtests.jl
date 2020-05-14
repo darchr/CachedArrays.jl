@@ -3,6 +3,8 @@ using Test
 using Random
 using BenchmarkTools
 
+include("utils/masktree.jl")
+
 include("memkind.jl")
 include("allocators.jl")
 
