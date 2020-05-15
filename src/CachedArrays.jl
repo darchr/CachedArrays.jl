@@ -37,7 +37,7 @@ else
     end
 end
 
-# This turns out to be surpritingly useful ...
+# This turns out to be surprisingly useful ...
 donothing(x...) = nothing
 
 # Bootstrap Utilities

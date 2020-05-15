@@ -1,7 +1,7 @@
 @testset "Testing Custom BuddyHeap Manager" begin
     # Start with a small heap for our experiments.
     allocator = CachedArrays.AlignedAllocator()
-    len = 2^20
+    len = 2^27
     heap = CachedArrays.BuddyHeap(allocator, len)
 
     # We should have 1 bin that is 2^20 bytes large.
@@ -74,8 +74,10 @@
     pointers = Set{Ptr{Nothing}}()
     Random.seed!(123)
 
-    for test in 1:3
-        @time for _ in 1:numtests
+    timer = TimerOutput()
+
+    @timeit timer "Test Running" for test in 1:3
+        for _ in 1:numtests
             # CHange ratios of allocations to frees.
             if test == 1
                 num_allocs = rand(1:20)
@@ -88,13 +90,13 @@
             for _ in 1:num_allocs
                 # Make a random allocation.
                 sz = rand(0:len - 256)
-                ptr = CachedArrays.alloc(heap, sz)
+                @timeit timer "Allocating" ptr = CachedArrays.alloc(heap, sz)
                 CachedArrays.zerocheck(heap)
 
                 # Throw an error if it doesn't pass.
                 # That way, if it actually doesn't pass, we don't get SPAMMED in the
                 # test window.
-                passed = CachedArrays.check(heap)
+                @timeit timer "Checking 1" passed = CachedArrays.check(heap)
                 !passed && error()
 
                 if !isnothing(ptr)
@@ -115,12 +117,14 @@
                 isempty(pointers) && break
                 ptr = rand(pointers)
                 delete!(pointers, ptr)
-                CachedArrays.free(heap, ptr)
-                passed = CachedArrays.check(heap)
+                @timeit timer "Freeing" CachedArrays.free(heap, ptr)
+                @timeit timer "Checking 2" passed = CachedArrays.check(heap)
                 !passed && error()
             end
         end
     end
+    printstyled(stdout, "Timer Results for Buddy Heap\n"; color = :cyan, bold = true)
+    println(stdout, timer)
 
     # Free all pointers
     for ptr in pointers

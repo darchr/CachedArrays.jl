@@ -2,6 +2,7 @@ using CachedArrays
 using Test
 using Random
 using BenchmarkTools
+using TimerOutputs
 
 include("utils/findnexttree.jl")
 
@@ -11,6 +12,7 @@ include("allocators.jl")
 include("memory/block.jl")
 include("memory/freelist.jl")
 include("memory/buddyheap.jl")
+include("memory/compactheap.jl")
 
 include("memcpy.jl")
 

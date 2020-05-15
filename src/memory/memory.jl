@@ -16,7 +16,7 @@ abstract type AbstractHeap end
 
 # Heap implementations
 include("buddyheap.jl")
-include("fastheap.jl")
+include("compactheap.jl")
 
 # API
 # basepointer - return the pointer to the base of the memory region managed by the heap

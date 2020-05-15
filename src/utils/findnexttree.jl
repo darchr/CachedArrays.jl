@@ -64,9 +64,11 @@ struct FindNextTree
     # higher indices descend through the tree.
     # runs[N] indicate the leaves.
     runs::Vector{Vector{Mask}}
+    length::Int
 end
 
 function FindNextTree(len::Integer)
+    original_length = len
     runs = Vector{Vector{Mask}}()
 
     # Keep adding entries until we've covered the whole tree.
@@ -76,7 +78,7 @@ function FindNextTree(len::Integer)
         thislen == 1 && break
         len = thislen
     end
-    return FindNextTree(runs)
+    return FindNextTree(runs, original_length)
 end
 
 # Faster mod for powers of 64
@@ -90,10 +92,14 @@ end
 end
 
 # Setting and clearing entries.
-# TODO: Bounds checking
 function setentry!(M::FindNextTree, index::Integer)
+    # Bound check
+    @boundscheck begin
+        index > M.length && throw(BoundsError(M, index))
+    end
+
     level = length(M.runs)
-    while true
+    @inbounds while true
         run = M.runs[level]
 
         newindex, modindex = divrem64(index)
@@ -109,8 +115,13 @@ function setentry!(M::FindNextTree, index::Integer)
 end
 
 function clearentry!(M::FindNextTree, index::Integer)
+    # Bound check
+    @boundscheck begin
+        index > M.length && throw(BoundsError(M, index))
+    end
+
     level = length(M.runs)
-    while true
+    @inbounds while true
         run = M.runs[level]
 
         newindex, modindex = divrem64(index)

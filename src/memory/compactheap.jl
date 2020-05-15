@@ -1,17 +1,17 @@
 # Granularity of allocations.
-const FASTHEAP_GRANULARITY = 2^22
+const COMPACTHEAP_GRANULARITY = 2^22   # 2 MiB
 
-# So we can access "binsize" before a `FastHeap` is instantiated.
-struct FastHeapDispatch end
+# So we can access "binsize" before a `CompactHeap` is instantiated.
+struct CompactHeapDispatch end
 
-getbin(::FastHeapDispatch, sz) = div(sz - 1, FASTHEAP_GRANULARITY) + 1
-binsize(::FastHeapDispatch, bin) = bin * FASTHEAP_GRANULARITY
+getbin(::CompactHeapDispatch, sz) = div(sz - 1, COMPACTHEAP_GRANULARITY) + 1
+binsize(::CompactHeapDispatch, bin) = bin * COMPACTHEAP_GRANULARITY
 
 #####
-##### FastHeap
+##### CompactHeap
 #####
 
-mutable struct FastHeap{T} <: AbstractHeap
+mutable struct CompactHeap{T} <: AbstractHeap
     allocator::T
 
     # Where is and what kind of memory do we have?
@@ -21,20 +21,20 @@ mutable struct FastHeap{T} <: AbstractHeap
 
     # Maintaining freelist status
     status::FindNextTree
-    freelists::Dict{Int,Freelist{Block}}
+    freelists::Vector{Freelist{Block}}
 end
 
-function FastHeap(allocator::T, sz; pool = DRAM) where {T}
-    # Round down size to the nearest multiple of `FASTHEAP_GRANULARITY`
-    sz = FASTHEAP_GRANULARITY * div(sz, FASTHEAP_GRANULARITY)
+function CompactHeap(allocator::T, sz; pool = DRAM) where {T}
+    # Round down size to the nearest multiple of `COMPACTHEAP_GRANULARITY`
+    sz = COMPACTHEAP_GRANULARITY * div(sz, COMPACTHEAP_GRANULARITY)
 
     # Allocate the memory managed by this heap
     base = allocate(allocator, sz)
-    numbins = getbin(FastHeapDispatch(), sz)
+    numbins = getbin(CompactHeapDispatch(), sz)
     status = FindNextTree(numbins)
-    freelists = Dict{Int,Freelist{Block}}()
+    freelists = [Freelist{Block}() for _ in 1:numbins]
 
-    heap = FastHeap{T}(
+    heap = CompactHeap{T}(
         allocator,
         base,
         sz,
@@ -59,18 +59,18 @@ function FastHeap(allocator::T, sz; pool = DRAM) where {T}
     return heap
 end
 
-getbin(::FastHeap, sz) = getbin(FastHeapDispatch(), sz)
-getbin(heap::FastHeap, block::Block) = getbin(heap, block.size)
+getbin(::CompactHeap, sz) = getbin(CompactHeapDispatch(), sz)
+getbin(heap::CompactHeap, block::Block) = getbin(heap, block.size)
 
-binsize(::FastHeap, bin) = binsize(FastHeapDispatch(), bin)
+binsize(::CompactHeap, bin) = binsize(CompactHeapDispatch(), bin)
 
-basepointer(heap::FastHeap) = heap.base
-Base.sizeof(heap::FastHeap) = heap.len
-baseaddress(heap::FastHeap) = convert(UInt, heap.base)
-numbins(heap::FastHeap) = length(heap.freelists)
+basepointer(heap::CompactHeap) = heap.base
+Base.sizeof(heap::CompactHeap) = heap.len
+baseaddress(heap::CompactHeap) = convert(UInt, heap.base)
+numbins(heap::CompactHeap) = length(heap.freelists)
 
-# The FastHeap maintains backsizes, so we can also walk backwards.
-function walkprevious(heap::FastHeap, block)
+# The CompactHeap maintains backsizes, so we can also walk backwards.
+function walkprevious(heap::CompactHeap, block)
     # Invariant, the first block will always have a backsize of zero.
     backsize = block.backsize
     if iszero(backsize)
@@ -86,27 +86,24 @@ end
 Sort all of the freelists in `heap` in order of increasing address.
 """
 function sortfreelists!(heap)
-    for freelist in values(heap.freelists)
+    for freelist in heap.freelists
         sort!(freelist)
     end
 end
 
-function Base.push!(heap::FastHeap, block::Block)
+function Base.push!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
-    list = get!(heap.freelists, bin, Freelist{Block}())
+    list = heap.freelists[bin]
 
     isempty(list) && setentry!(heap.status, bin)
     push!(list, block)
     return nothing
 end
 
-popfreelist!(heap::FastHeap, bin::Integer) = popfreelist!(heap, heap.freelists[bin], bin)
-function popfreelist!(heap::FastHeap, list::Freelist, bin::Integer)
+popfreelist!(heap::CompactHeap, bin::Integer) = popfreelist!(heap, heap.freelists[bin], bin)
+function popfreelist!(heap::CompactHeap, list::Freelist, bin::Integer)
     block = pop!(list)
-    if isempty(list)
-        delete!(heap.freelists, bin)
-        clearentry!(heap.status, bin)
-    end
+    isempty(list) && clearentry!(heap.status, bin)
     return block
 end
 
@@ -114,9 +111,10 @@ end
 # If a freelist doesn't exist for this bin, split the next largest block.
 #
 # Assume `sz` is a multiple of the heap granularity
-function Base.pop!(heap::FastHeap, bin)
-    list = get(heap.freelists, bin, nothing)
-    if !isnothing(list)
+function Base.pop!(heap::CompactHeap, bin)
+    #list = get(heap.freelists, bin, nothing)
+    list = heap.freelists[bin]
+    if !isempty(list)
         return popfreelist!(heap, list, bin)
     end
 
@@ -155,18 +153,15 @@ function Base.pop!(heap::FastHeap, bin)
     return block
 end
 
-function remove!(heap::FastHeap, block::Block)
+function remove!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
     list = heap.freelists[bin]
     remove!(list, block)
-    if isempty(list)
-        delete!(heap.freelists, bin)
-        clearentry!(heap.status, bin)
-    end
+    isempty(list) && clearentry!(heap.status, bin)
     return nothing
 end
 
-function putback!(heap::FastHeap, block::Block)
+function putback!(heap::CompactHeap, block::Block)
     @check isfree(block)
 
     # Check the block before and after are free.
@@ -204,10 +199,12 @@ end
 ##### High level API
 #####
 
-function alloc(heap::FastHeap, bytes::Integer, id::UInt)
+function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     iszero(bytes) && return nothing
 
-    bin = getbin(heap, max(bytes + headersize(), FASTHEAP_GRANULARITY))
+    needed_size = max(bytes + headersize(), COMPACTHEAP_GRANULARITY)
+    needed_size > sizeof(heap) && return nothing
+    bin = getbin(heap, needed_size)
     block = pop!(heap, bin)
     isnothing(block) && return nothing
 
@@ -220,7 +217,7 @@ function alloc(heap::FastHeap, bytes::Integer, id::UInt)
     return ptr
 end
 
-function free(heap::FastHeap, ptr::Ptr{Nothing})
+function free(heap::CompactHeap, ptr::Ptr{Nothing})
     block = unsafe_block(ptr)
     block.evicting == true && return nothing
     block.free = true
@@ -234,7 +231,7 @@ end
 
 # We don't have buddy constraints here - so as long as the request is less than the size
 # of the entire heap, we can allocate it.
-canallocfrom(heap::FastHeap, block::Block, sz) = (sz < sizeof(heap))
+canallocfrom(heap::CompactHeap, block::Block, sz) = (sz < sizeof(heap))
 
 function unsafe_free!(f, block::Block)
     @check !isfree(block)
@@ -254,7 +251,7 @@ function evict!(f::F, heap, block) where {F}
     return nothing
 end
 
-function evictfrom!(heap::FastHeap, block::Block, sz; cb = donothing)
+function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     bsz = binsize(getbin(heap, sz + headersize()))
 
     current = block
@@ -289,7 +286,7 @@ end
 ##### Checker
 #####
 
-# Check the various invariants of the FastHeap
+# Check the various invariants of the CompactHeap
 #
 # 1. First Block should always have zero backsize
 # 2. Any freelist entry in the freelist dict must have an entry in the `status` tree.
@@ -298,7 +295,7 @@ end
 # 5. Free blocks found by walking the heap must be consistent with free-blocks found walking
 #    the freelists
 
-function first_block_invariant(heap::FastHeap)
+function first_block_invariant(heap::CompactHeap)
     block = baseblock(heap)
     if !iszero(block.backsize)
         println("Base block has nonzero backsize: $(block.backsize)")
@@ -307,8 +304,8 @@ function first_block_invariant(heap::FastHeap)
     return true
 end
 
-function freelist_status_invariant(heap::FastHeap)
-    maxbin = binsize(heap, sizeof(heap))
+function freelist_status_invariant(heap::CompactHeap)
+    maxbin = getbin(heap, sizeof(heap))
     passed = true
 
     # Walk the `status` tree and correlate the entries with the freelist dict.
@@ -319,28 +316,30 @@ function freelist_status_invariant(heap::FastHeap)
 
             if hasentryat(mask, j)
                 # There must be a key in the `freelists` dictionary and it must be non-empty
-                if !haskey(heap.freelists, bin)
+                #if !haskey(heap.freelists, bin)
+                if isempty(heap.freelists[bin])
                     println("Heap has a `status` entry for bin $bin but no corresponding freelist bound")
                     passed = false
                 end
             else
                 # No entry here - there must not be an entry in the dict.
-                if haskey(heap.freelists, bin)
+                #if haskey(heap.freelists, bin)
+                if !isempty(heap.freelists[bin])
                     println("Heap as no `status` entry for $bin but found a freelist")
                     passed = false
                 end
             end
 
-            if haskey(heap.freelists, bin) && isempty(heap.freelists[bin])
-                println("Found an empty freelist for bin $bin")
-                passed = false
-            end
+            # if haskey(heap.freelists, bin) && isempty(heap.freelists[bin])
+            #     println("Found an empty freelist for bin $bin")
+            #     passed = false
+            # end
         end
     end
     return passed
 end
 
-function size_invariant(heap::FastHeap)
+function size_invariant(heap::CompactHeap)
     passed = true
 
     # This certainly better not be nothing!
@@ -373,7 +372,7 @@ function size_invariant(heap::FastHeap)
     return passed
 end
 
-function free_invariant(heap::FastHeap)
+function free_invariant(heap::CompactHeap)
     passed = true
     counts = Dict{Int,Int}()
 
@@ -385,17 +384,20 @@ function free_invariant(heap::FastHeap)
         end
     end
 
-    for (bin, freelist) in heap.freelists
-        if !haskey(counts, bin)
-            println("Found a freelist for bin $bin but no block of this size found")
-            passed = false
+    #for (bin, freelist) in heap.freelists
+    for (bin, freelist) in enumerate(heap.freelists)
+        if !isempty(freelist)
+            if !haskey(counts, bin)
+                println("Found a freelist for bin $bin but no block of this size found")
+                passed = false
+            else
+                if length(freelist) != counts[bin]
+                    println("Length of freelist is $(length(freelist)) but counted $(counts[bin]) blocks")
+                    passed = false
+                end
+                delete!(counts, bin)
+            end
         end
-
-        if length(freelist) != counts[bin]
-            println("Length of freelist is $(length(freelist)) but counted $(counts[bin]) blocks")
-            passed = false
-        end
-        delete!(counts, bin)
     end
 
     # Did we miss any
@@ -410,7 +412,7 @@ function free_invariant(heap::FastHeap)
     return passed
 end
 
-function check(heap::FastHeap)
+function check(heap::CompactHeap)
     passed = true
     if !first_block_invariant(heap)
         printstyled(stdout, "Heap failed First Block Invariant\n"; color = :red)
