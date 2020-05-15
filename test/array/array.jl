@@ -55,7 +55,8 @@ end
     manager = CachedArrays.CacheManager(
         @__DIR__;
         localsize = 1_000_000_000,
-        remotesize = 1_000_000_000
+        remotesize = 1_000_000_000,
+        minallocation = 12,
     )
 
     # Run the GC test, then run garbage collection.

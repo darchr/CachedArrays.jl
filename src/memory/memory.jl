@@ -63,7 +63,7 @@ end
 # AbstractHeaps should keep the `block.size` feature.
 function walknext(heap::AbstractHeap, block::Block)
     ptr = pointer(block) + block.size
-    if ptr > endof(heap)
+    if ptr >= endof(heap)
         return nothing
     else
         return Block(ptr)

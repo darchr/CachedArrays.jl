@@ -1,11 +1,13 @@
-# Granularity of allocations.
-const COMPACTHEAP_GRANULARITY = 2^22   # 2 MiB
-
 # So we can access "binsize" before a `CompactHeap` is instantiated.
-struct CompactHeapDispatch end
+struct PowerOfTwo
+    val::Int
+end
 
-getbin(::CompactHeapDispatch, sz) = div(sz - 1, COMPACTHEAP_GRANULARITY) + 1
-binsize(::CompactHeapDispatch, bin) = bin * COMPACTHEAP_GRANULARITY
+poweroftwo(x::PowerOfTwo) = x
+poweroftwo(x::Integer) = PowerOfTwo(x)
+
+getbin(x::PowerOfTwo, sz) = ((sz - 1) >> x.val) + 1
+binsize(x::PowerOfTwo, bin) = bin << x.val
 
 #####
 ##### CompactHeap
@@ -13,6 +15,7 @@ binsize(::CompactHeapDispatch, bin) = bin * COMPACTHEAP_GRANULARITY
 
 mutable struct CompactHeap{T} <: AbstractHeap
     allocator::T
+    minallocation::PowerOfTwo
 
     # Where is and what kind of memory do we have?
     base::Ptr{Nothing}
@@ -24,18 +27,28 @@ mutable struct CompactHeap{T} <: AbstractHeap
     freelists::Vector{Freelist{Block}}
 end
 
-function CompactHeap(allocator::T, sz; pool = DRAM) where {T}
+function CompactHeap(
+        allocator::T,
+        sz;
+        pool = DRAM,
+        # Power of two
+        minallocation = PowerOfTwo(21),
+    ) where {T}
+
+    minallocation = poweroftwo(minallocation)
+
     # Round down size to the nearest multiple of `COMPACTHEAP_GRANULARITY`
-    sz = COMPACTHEAP_GRANULARITY * div(sz, COMPACTHEAP_GRANULARITY)
+    sz = (sz >> minallocation.val) << minallocation.val
 
     # Allocate the memory managed by this heap
     base = allocate(allocator, sz)
-    numbins = getbin(CompactHeapDispatch(), sz)
+    numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
     freelists = [Freelist{Block}() for _ in 1:numbins]
 
     heap = CompactHeap{T}(
         allocator,
+        minallocation,
         base,
         sz,
         pool,
@@ -52,6 +65,7 @@ function CompactHeap(allocator::T, sz; pool = DRAM) where {T}
     block.size = sz
     block.backsize = 0
     block.free = true
+    block.pool = pool
     block.next = Block()
     block.previous = Block()
 
@@ -59,10 +73,10 @@ function CompactHeap(allocator::T, sz; pool = DRAM) where {T}
     return heap
 end
 
-getbin(::CompactHeap, sz) = getbin(CompactHeapDispatch(), sz)
+getbin(heap::CompactHeap, sz) = getbin(heap.minallocation, sz)
 getbin(heap::CompactHeap, block::Block) = getbin(heap, block.size)
 
-binsize(::CompactHeap, bin) = binsize(CompactHeapDispatch(), bin)
+binsize(heap::CompactHeap, bin) = binsize(heap.minallocation, bin)
 
 basepointer(heap::CompactHeap) = heap.base
 Base.sizeof(heap::CompactHeap) = heap.len
@@ -202,7 +216,7 @@ end
 function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     iszero(bytes) && return nothing
 
-    needed_size = max(bytes + headersize(), COMPACTHEAP_GRANULARITY)
+    needed_size = max(bytes + headersize(), one(bytes) << heap.minallocation.val)
     needed_size > sizeof(heap) && return nothing
     bin = getbin(heap, needed_size)
     block = pop!(heap, bin)
@@ -251,28 +265,30 @@ function evict!(f::F, heap, block) where {F}
     return nothing
 end
 
+# Helper method to get a block from a pointer.
+function evictfrom!(heap::CompactHeap, ptr::Ptr{Nothing}, sz; kw...)
+    evictfrom!(heap, unsafe_block(ptr), sz; kw...)
+end
+
 function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     bsz = binsize(getbin(heap, sz + headersize()))
 
-    current = block
-    evict!(cb, heap, block)
-
     sizefreed = 0
+    current = block
     # Walk forward until either we have freed enough space or reach the end of the heap.
-    while sizefreed < sz && !isnothing(current)
-        current = walknext(heap, current)
+    while true
         sizefreed += current.size
-        evict!(cb, heap, block)
+        evict!(cb, heap, current)
+        current = walknext(heap, current)
+        # If we've either freed enough memory or walked off the end of the array, exit.
+        (sizefreed >= sz || isnothing(current)) && break
     end
 
     # Walk backwards if we have to in order to free enough space.
-    if sizefreed < sz
-        current = block
-        while sizefreed < sz
-            current = walkprevious(heap, block)
-            sizefreed += current.size
-            evict!(cb, heap, block)
-        end
+    while sizefreed < sz
+        block = walkprevious(heap, block)
+        sizefreed += block.size
+        evict!(cb, heap, block)
     end
 
     # Resize our block and put it back in the heap.

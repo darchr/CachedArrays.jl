@@ -4,7 +4,13 @@
     PoolType = CachedArrays.PoolType
 
     GC.gc(true)
-    manager = CachedArrays.CacheManager(@__DIR__; localsize = 2^20, remotesize = 2^20)
+    manager = CachedArrays.CacheManager(
+        @__DIR__;
+        localsize = 2^20,
+        remotesize = 2^20,
+        minallocation = 12
+    )
+
     @test length(manager.local_objects) == 0
     @test length(manager.remote_objects) == 0
 

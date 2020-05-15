@@ -46,6 +46,7 @@ function CacheManager(
         policy = LRU{Block}(),
         flushpercent::Float32 = Float32(1),
         gc_before_evict = false,
+        minallocation = 22
     ) where {T}
 
     # If we're in 2LM, pass a nullptr.
@@ -64,10 +65,23 @@ function CacheManager(
     remote_objects = Dict{UInt,WeakRef}()
     size_of_remote = 0
 
-    # Initialize the cache
 
-    pmm_heap = BuddyHeap(MemKindAllocator(kind), remotesize; pool = PMM)
-    dram_heap = BuddyHeap(AlignedAllocator(), localsize; pool = DRAM)
+    #pmm_heap = BuddyHeap(MemKindAllocator(kind), remotesize; pool = PMM)
+    #dram_heap = BuddyHeap(AlignedAllocator(), localsize; pool = DRAM)
+    # Initialize Heaps
+    pmm_heap = CompactHeap(
+        MemKindAllocator(kind),
+        remotesize;
+        pool = PMM,
+        minallocation = minallocation
+    )
+
+    dram_heap = CompactHeap(
+        AlignedAllocator(),
+        localsize;
+        pool = DRAM,
+        minallocation = minallocation
+    )
 
     # Construct the manager.
     manager = CacheManager(

@@ -65,7 +65,7 @@ function BuddyHeap(
         sz;
         pool = DRAM,
         maxallocation = nothing
-    ) where {S,T}
+    ) where {T}
 
     # Make an initial allocation of `sz`.
     base = allocate(allocator, sz)

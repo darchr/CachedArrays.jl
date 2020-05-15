@@ -4,6 +4,7 @@
         @__DIR__;
         localsize = 1_000_000_000,
         remotesize = 1_000_000_000,
+        minallocation = 12,
     )
 
     # Make sure everything has been cleaned up from previous runs.
