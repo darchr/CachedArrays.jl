@@ -14,6 +14,10 @@ isnull(x::UInt) = iszero(x)
 
 abstract type AbstractHeap end
 
+# Heap implementations
+include("buddyheap.jl")
+include("fastheap.jl")
+
 # API
 # basepointer - return the pointer to the base of the memory region managed by the heap
 # sizeof - lenght of the memory region in bytes
@@ -56,7 +60,14 @@ function Base.length(heap::AbstractHeap)
     return count
 end
 
-# Heap implementations
-include("buddyheap.jl")
-include("fastheap.jl")
+# AbstractHeaps should keep the `block.size` feature.
+function walknext(heap::AbstractHeap, block::Block)
+    ptr = pointer(block) + block.size
+    if ptr > endof(heap)
+        return nothing
+    else
+        return Block(ptr)
+    end
+end
+
 

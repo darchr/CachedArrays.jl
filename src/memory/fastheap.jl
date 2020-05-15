@@ -7,25 +7,6 @@ struct FastHeapDispatch end
 getbin(::FastHeapDispatch, sz) = div(sz - 1, FASTHEAP_GRANULARITY) + 1
 binsize(::FastHeapDispatch, bin) = bin * FASTHEAP_GRANULARITY
 
-function walknext(heap, block)
-    ptr = pointer(block) + block.size
-    if ptr > endof(heap)
-        return nothing
-    else
-        return Block(ptr)
-    end
-end
-
-function walkprevious(heap, block)
-    # Invariant, the first block will always have a backsize of zero.
-    backsize = block.backsize
-    if iszero(backsize)
-        return nothing
-    else
-        return Block(pointer(block) - backsize)
-    end
-end
-
 #####
 ##### FastHeap
 #####
@@ -39,7 +20,7 @@ mutable struct FastHeap{T} <: AbstractHeap
     pool::Pool
 
     # Maintaining freelist status
-    status::MaskTree
+    status::FindNextTree
     freelists::Dict{Int,Freelist{Block}}
 end
 
@@ -50,7 +31,7 @@ function FastHeap(allocator::T, sz; pool = DRAM) where {T}
     # Allocate the memory managed by this heap
     base = allocate(allocator, sz)
     numbins = getbin(FastHeapDispatch(), sz)
-    status = MaskTree(numbins)
+    status = FindNextTree(numbins)
     freelists = Dict{Int,Freelist{Block}}()
 
     heap = FastHeap{T}(
@@ -74,7 +55,7 @@ function FastHeap(allocator::T, sz; pool = DRAM) where {T}
     block.next = Block()
     block.previous = Block()
 
-    pushfreelist!(heap, block)
+    push!(heap, block)
     return heap
 end
 
@@ -88,6 +69,17 @@ Base.sizeof(heap::FastHeap) = heap.len
 baseaddress(heap::FastHeap) = convert(UInt, heap.base)
 numbins(heap::FastHeap) = length(heap.freelists)
 
+# The FastHeap maintains backsizes, so we can also walk backwards.
+function walkprevious(heap::FastHeap, block)
+    # Invariant, the first block will always have a backsize of zero.
+    backsize = block.backsize
+    if iszero(backsize)
+        return nothing
+    else
+        return Block(pointer(block) - backsize)
+    end
+end
+
 """
     sortfreelists!(heap)
 
@@ -99,7 +91,7 @@ function sortfreelists!(heap)
     end
 end
 
-function pushfreelist!(heap::FastHeap, block)
+function Base.push!(heap::FastHeap, block::Block)
     bin = getbin(heap, block)
     list = get!(heap.freelists, bin, Freelist{Block}())
 
@@ -108,34 +100,37 @@ function pushfreelist!(heap::FastHeap, block)
     return nothing
 end
 
+popfreelist!(heap::FastHeap, bin::Integer) = popfreelist!(heap, heap.freelists[bin], bin)
+function popfreelist!(heap::FastHeap, list::Freelist, bin::Integer)
+    block = pop!(list)
+    if isempty(list)
+        delete!(heap.freelists, bin)
+        clearentry!(heap.status, bin)
+    end
+    return block
+end
+
 # Pop a block for this bin.
 # If a freelist doesn't exist for this bin, split the next largest block.
 #
 # Assume `sz` is a multiple of the heap granularity
-function popfreelist!(heap::FastHeap, bin)
+function Base.pop!(heap::FastHeap, bin)
     list = get(heap.freelists, bin, nothing)
     if !isnothing(list)
-        block = pop!(list)
-
-        # If this freelist is now empty, clean up the tracker.
-        if isempty(list)
-            delete!(heap.freelists, bin)
-            clearentry!(heap.status, bin)
-        end
-        return block
+        return popfreelist!(heap, list, bin)
     end
 
     # Okay, we don't have a block.
     # We need to get the next highest available block and split it.
     nextbin = findnext(heap.status, bin)
+
+    # No bigger block available.
+    # This means we can't fulfill this request.
+    # Return `nothing` to indicate this.
     isnothing(nextbin) && return nothing
 
-    list = heap.freelists[nextbin]
-    block = pop!(list)
-    if isempty(list)
-        delete!(heap.freelists, nextbin)
-        clearentry!(heap.status, nextbin)
-    end
+    # Otherwise, pop of this
+    block = popfreelist!(heap, nextbin)
 
     # Now that we have the block, split it down to the size we want and put the remainder
     # back in the heap.
@@ -156,7 +151,7 @@ function popfreelist!(heap::FastHeap, bin)
         next.backsize = remainder.size
     end
 
-    pushfreelist!(heap, remainder)
+    push!(heap, remainder)
     return block
 end
 
@@ -201,7 +196,7 @@ function putback!(heap::FastHeap, block::Block)
         end
     end
 
-    pushfreelist!(heap, block)
+    push!(heap, block)
     return nothing
 end
 
@@ -213,7 +208,7 @@ function alloc(heap::FastHeap, bytes::Integer, id::UInt)
     iszero(bytes) && return nothing
 
     bin = getbin(heap, max(bytes + headersize(), FASTHEAP_GRANULARITY))
-    block = popfreelist!(heap, bin)
+    block = pop!(heap, bin)
     isnothing(block) && return nothing
 
     block.free = false

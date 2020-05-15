@@ -8,7 +8,7 @@
 #
 # One option is to linearly scan the freelists ... but that's linear.
 #
-# The approach here is use a `MaskTree`.
+# The approach here is use a `FindNextTree`.
 #
 # The idea is that we use a bitmask UInt64 to encode groups of 64 buckets.
 # A 1 in the mask represents that a bucket is non-empty.
@@ -32,40 +32,51 @@ If `i` is provided, return the index of the first non-zero entry in `m` greater 
 
 Behavior is undefined if `i > 64` - so don't so that.
 """
-function firstentry(m::Mask, i::Integer)
-    return trailing_zeros(m.val & ~((one(UInt) << (unsigned(i))) - 1)) + 1
-end
-
-firstentry(m::Mask) = trailing_zeros(m.val) + 1
+firstentry(m::Mask, i::Integer = 0) = trailing_zeros(m.val >> i) + i + 1
 
 """
-    hasentry(m::Mask, [i::Integer])
+    isvalidentry(x::Integer) -> Bool
+
+Return `true` if the value returned by `firstentry` is a valid entry.
+"""
+isvalidentry(x::Integer) = x <= 64
+
+"""
+    hasentry(m::Mask, [i::Integer]) -> Bool
 
 Return `true` is `m` has at least one non-zero entry.
 If `i` is provided, return `true` is `m` has at least one non-zero entry greater than `i`.
 """
-hasentry(m::Mask, i::Integer) = (i > 63) ? false : (m.val > (one(UInt) << unsigned(i)))
-hasentry(m::Mask) = !iszero(m.val)
-hasentryat(m::Mask, i::Integer) = !iszero(m.val & (one(UInt64) << (unsigned(i)-1)))
+hasentry(m::Mask, i::Integer = 0) = (m.val >> i) >= one(UInt64)
+hasentryat(m::Mask, i::Integer) = isodd(m.val >> (i-1))
 
-struct MaskTree
+"""
+    numentries(m::Mask) -> Integer
+
+Return the number of set bits in `m`.
+"""
+numentries(m::Mask) = count_ones(m.val)
+
+cdiv(x::T, y::T) where {T} = one(T) + div(x - one(T), y)
+
+struct FindNextTree
     # runs[1] is the highest-level
     # higher indices descend through the tree.
     # runs[N] indicate the leaves.
     runs::Vector{Vector{Mask}}
 end
 
-function MaskTree(len::Integer)
+function FindNextTree(len::Integer)
     runs = Vector{Vector{Mask}}()
 
     # Keep adding entries until we've covered the whole tree.
     while true
-        thislen = ceil(Int, len / 64)
+        thislen = cdiv(len, 64)
         pushfirst!(runs, [Mask(0) for _ in 1:thislen])
         thislen == 1 && break
         len = thislen
     end
-    return MaskTree(runs)
+    return FindNextTree(runs)
 end
 
 # Faster mod for powers of 64
@@ -79,7 +90,8 @@ end
 end
 
 # Setting and clearing entries.
-function setentry!(M::MaskTree, index::Integer)
+# TODO: Bounds checking
+function setentry!(M::FindNextTree, index::Integer)
     level = length(M.runs)
     while true
         run = M.runs[level]
@@ -96,7 +108,7 @@ function setentry!(M::MaskTree, index::Integer)
     return nothing
 end
 
-function clearentry!(M::MaskTree, index::Integer)
+function clearentry!(M::FindNextTree, index::Integer)
     level = length(M.runs)
     while true
         run = M.runs[level]
@@ -112,22 +124,22 @@ function clearentry!(M::MaskTree, index::Integer)
     return nothing
 end
 
-function Base.findnext(M::MaskTree, index::Integer)
+function Base.findnext(M::FindNextTree, index::Integer)
+    index > 64 * length(M.runs[end]) && return nothing
     level = length(M.runs)
-    local modindex
 
     # Go up the tree until we find a non-empty entry.
-    while true
+    @inbounds while true
         run = M.runs[level]
         newindex, modindex = divrem64(index)
-
         mask = run[newindex]
 
-        # First entry being less than 64 implies that we have a match
+        # Find the first entry for this index.
+        # If it is valid, then we're good to go.
         entry = firstentry(mask, modindex)
-        if entry < 65
+        if isvalidentry(entry)
             # Go into this level.
-            index = (newindex + entry - 1)
+            index = ((newindex - 1) << 6) + entry
             level += 1
             break
         end
@@ -139,7 +151,7 @@ function Base.findnext(M::MaskTree, index::Integer)
     end
 
     # Now, we have to go back down the tree to get the final index
-    while level <= length(M.runs)
+    @inbounds while level <= length(M.runs)
         run = M.runs[level]
         index = ((index - 1) << 6) + firstentry(run[index])
         level += 1

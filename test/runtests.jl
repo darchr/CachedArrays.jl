@@ -3,7 +3,7 @@ using Test
 using Random
 using BenchmarkTools
 
-include("utils/masktree.jl")
+include("utils/findnexttree.jl")
 
 include("memkind.jl")
 include("allocators.jl")
