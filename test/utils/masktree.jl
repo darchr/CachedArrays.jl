@@ -48,5 +48,7 @@
         end
 
         # Okay, now we get a little wilder
+        tree = CachedArrays.MaskTree(64^3)
+        @test length(tree.runs) == 3
     end
 end

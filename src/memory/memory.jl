@@ -29,6 +29,8 @@ alloc(heap::AbstractHeap, bytes::Integer, id::Integer) = alloc(heap, bytes, UInt
 
 free(heap::AbstractHeap, ptr::Ptr) = free(heap::AbstractHeap, convert(Ptr{Nothing}, ptr))
 
+endof(heap::AbstractHeap) = basepointer(heap) + sizeof(heap)
+
 function basepointer end
 baseblock(heap::AbstractHeap) = Block(basepointer(heap))
 
