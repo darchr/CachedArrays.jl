@@ -52,9 +52,11 @@ strip_params(::T) where {T <: AbstractCachedArray} = strip_params(T)
 ##### Constructors
 #####
 
+CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
+
 function CachedArray{T,N}(x::Array{T,N}, manager::C) where {T,N,C}
-    ptr = unsafe_alloc(T, PoolType{DRAM}(), manager, typeof(x), size(x))
-    copyto!(ptr, pointer(x), length(x))
+    ptr = unsafe_alloc(T, PoolType{DRAM}(), manager, sizeof(x))
+    unsafe_copyto!(ptr, pointer(x), length(x))
     return CachedArray{T,N,C}(ptr, size(x), manager)
 end
 

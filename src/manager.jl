@@ -65,9 +65,6 @@ function CacheManager(
     remote_objects = Dict{UInt,WeakRef}()
     size_of_remote = 0
 
-
-    #pmm_heap = BuddyHeap(MemKindAllocator(kind), remotesize; pool = PMM)
-    #dram_heap = BuddyHeap(AlignedAllocator(), localsize; pool = DRAM)
     # Initialize Heaps
     pmm_heap = CompactHeap(
         MemKindAllocator(kind),
@@ -273,20 +270,6 @@ end
 
 unsafe_alloc(::Type{T}, x...; kw...) where {T} = convert(Ptr{T}, unsafe_alloc(x...; kw...))
 
-# function alloc(
-#         ::PoolType{PMM},
-#         manager::CacheManager,
-#         ::Type{Array{T,N}},
-#         dims::NTuple{N,Int}
-#     ) where {T,N}
-#
-#     A = unsafe_alloc(PoolType{PMM}(), manager, Array{T,N}, dims)
-#     finalizer(A) do x
-#         free(manager.pmm_heap, convert(Ptr{Nothing}, pointer(x)))
-#     end
-#     return A
-# end
-
 # Remote alloc without a finalizer
 function unsafe_alloc(
         ::PoolType{PMM},
@@ -321,20 +304,6 @@ end
 #         the object we want to allocate.
 #
 #         Do that free operation.
-
-# function alloc(
-#         ::PoolType{DRAM},
-#         manager::CacheManager,
-#         ::Type{Array{T,N}},
-#         dims::NTuple{N,Int}
-#     ) where {T,N}
-#
-#     A = unsafe_alloc(PoolType{DRAM}(), manager, Array{T,N}, dims)
-#     finalizer(A) do x
-#         free(manager.dram_heap, convert(Ptr{Nothing}, pointer(x)))
-#     end
-#     return A
-# end
 
 function unsafe_alloc(
         ::PoolType{DRAM},

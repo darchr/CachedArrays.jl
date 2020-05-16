@@ -332,24 +332,17 @@ function freelist_status_invariant(heap::CompactHeap)
 
             if hasentryat(mask, j)
                 # There must be a key in the `freelists` dictionary and it must be non-empty
-                #if !haskey(heap.freelists, bin)
                 if isempty(heap.freelists[bin])
                     println("Heap has a `status` entry for bin $bin but no corresponding freelist bound")
                     passed = false
                 end
             else
                 # No entry here - there must not be an entry in the dict.
-                #if haskey(heap.freelists, bin)
                 if !isempty(heap.freelists[bin])
                     println("Heap as no `status` entry for $bin but found a freelist")
                     passed = false
                 end
             end
-
-            # if haskey(heap.freelists, bin) && isempty(heap.freelists[bin])
-            #     println("Found an empty freelist for bin $bin")
-            #     passed = false
-            # end
         end
     end
     return passed
@@ -400,7 +393,6 @@ function free_invariant(heap::CompactHeap)
         end
     end
 
-    #for (bin, freelist) in heap.freelists
     for (bin, freelist) in enumerate(heap.freelists)
         if !isempty(freelist)
             if !haskey(counts, bin)
