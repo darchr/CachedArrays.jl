@@ -3,3 +3,5 @@
 deps
 tags
 *.swp
+*.jls
+tags.lock

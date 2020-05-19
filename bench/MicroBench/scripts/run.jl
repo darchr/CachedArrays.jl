@@ -2,8 +2,7 @@
 ##### Main Setup
 #####
 
-#is2lm = parse(Bool, ENV["JULIA_IS_2LM"])
-is2lm = false
+is2lm = parse(Bool, ENV["JULIA_IS_2LM"])
 
 # In 2LM, we don't need to worry about tinkering with the eviction policies
 if is2lm
