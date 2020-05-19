@@ -2,15 +2,15 @@
 ##### Main Setup
 #####
 
-is2lm = parse(Bool, ENV["JULIA_IS_2LM"])
+#is2lm = parse(Bool, ENV["JULIA_IS_2LM"])
+is2lm = false
 
 # In 2LM, we don't need to worry about tinkering with the eviction policies
 if is2lm
     flushpercents = [1.0]
     policies = ["CachedArrays.LRU{CachedArrays.Block}()"]
 else
-    #flushpercents = [0.8, 1.0]
-    flushpercents = [1.0]
+    flushpercents = [0.8, 1.0]
     policies = [
         "CachedArrays.LRU{CachedArrays.Block}()",
         "CachedArrays.RandomPolicy{CachedArrays.Block}()",
@@ -28,8 +28,7 @@ end
 ##### 1D tests
 #####
 
-#totalsizes = [240_000_000_000, 400_000_000_000]
-totalsizes = [240_000_000_000]
+totalsizes = [150_000_000_000, 240_000_000_000, 400_000_000_000]
 arraysizes = [1_000_000_000]
 
 iter = Iterators.product(
@@ -48,33 +47,33 @@ for (totalsize, arraysize, fp, policy) in iter
     """
     __run(cmd)
 
-    # # Alloc and Dealloc
-    # cmd = """
-    #     using MicroBench, CachedArrays;
-    #     MicroBench.alloc_tests($totalsize, $arraysize, $fp, $policy)
-    # """
-    # __run(cmd)
+    # Alloc and Dealloc
+    cmd = """
+        using MicroBench, CachedArrays;
+        MicroBench.alloc_tests($totalsize, $arraysize, $fp, $policy)
+    """
+    __run(cmd)
 end
 
-# #####
-# ##### 2D Tests
-# #####
-#
-# totalsizes = [240_000_000_000, 400_000_000_000]
-# arraysizes = [1_000_000_000]
-#
-# iter = Iterators.product(
-#     totalsizes,
-#     arraysizes,
-#     flushpercents,
-#     policies,
-# )
-#
-# for (totalsize, arraysize, fp, policy) in iter
-#     cmd = """
-#         using MicroBench, CachedArrays;
-#         MicroBench.tests_2d($totalsize, $arraysize, $fp, $policy)
-#     """
-#     __run(cmd)
-# end
+#####
+##### 2D Tests
+#####
+
+totalsizes = [150_000_000_000, 240_000_000_000, 400_000_000_000]
+arraysizes = [100_000_000, 1_000_000_000]
+
+iter = Iterators.product(
+    totalsizes,
+    arraysizes,
+    flushpercents,
+    policies,
+)
+
+for (totalsize, arraysize, fp, policy) in iter
+    cmd = """
+        using MicroBench, CachedArrays;
+        MicroBench.tests_2d($totalsize, $arraysize, $fp, $policy)
+    """
+    __run(cmd)
+end
 

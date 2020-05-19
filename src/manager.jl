@@ -44,10 +44,13 @@ function CacheManager(
         localsize = 1_000_000_000,
         remotesize = 1_000_000_000,
         policy = LRU{Block}(),
-        flushpercent::Float32 = Float32(1),
+        flushpercent = Float32(1),
         gc_before_evict = false,
         minallocation = 22
     ) where {T}
+
+    # Argument conversion
+    flushpercent = Float32(flushpercent)
 
     # If we're in 2LM, pass a nullptr.
     # MemKindAllocator gets swapped to something that throws an error if called.

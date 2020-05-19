@@ -37,6 +37,7 @@ function matrix_mult_forward_and_back(arrays::Vector; iterations = 1)
             CachedArrays.evict!(arrays[i])
             CachedArrays.evict!(arrays[i+1])
         end
+
         @showprogress 1 for i in (length(arrays)-2):-3:1
             mul!(arrays[i], arrays[i-2], arrays[i-1])
 

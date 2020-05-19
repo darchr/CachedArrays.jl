@@ -99,12 +99,12 @@ function setentry!(M::FindNextTree, index::Integer)
     end
 
     level = length(M.runs)
-    @inbounds while true
+    while true
         run = M.runs[level]
 
         newindex, modindex = divrem64(index)
-        update = !hasentry(run[newindex])
-        run[newindex] |= (one(UInt64) << (modindex-1))
+        @inbounds update = !hasentry(run[newindex])
+        @inbounds run[newindex] |= (one(UInt64) << (modindex-1))
 
         # Break out if either we don't need an update, or this is the top level.
         (update && level > 1) || break
@@ -121,13 +121,13 @@ function clearentry!(M::FindNextTree, index::Integer)
     end
 
     level = length(M.runs)
-    @inbounds while true
+    while true
         run = M.runs[level]
 
         newindex, modindex = divrem64(index)
 
-        run[newindex] &= ~(one(UInt64) << (modindex-1))
-        update = !hasentry(run[newindex])
+        @inbounds run[newindex] &= ~(one(UInt64) << (modindex-1))
+        @inbounds update = !hasentry(run[newindex])
         (update && level > 1) || break
         index = newindex
         level -= 1
