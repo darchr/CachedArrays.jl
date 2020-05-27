@@ -9,9 +9,10 @@ if is2lm
     flushpercents = [1.0]
     policies = ["CachedArrays.LRU{CachedArrays.Block}()"]
 else
-    flushpercents = [0.8, 1.0]
+    flushpercents = [0.8]
+    #flushpercents = [1.0]
     policies = [
-        "CachedArrays.LRU{CachedArrays.Block}()",
+        #"CachedArrays.LRU{CachedArrays.Block}()",
         "CachedArrays.RandomPolicy{CachedArrays.Block}()",
     ]
 end
@@ -38,21 +39,21 @@ iter = Iterators.product(
 )
 
 # Run loop
-for (totalsize, arraysize, fp, policy) in iter
-    # 1D tests
-    cmd = """
-        using MicroBench, CachedArrays;
-        MicroBench.tests_1d($totalsize, $arraysize, $fp, $policy)
-    """
-    __run(cmd)
-
-    # Alloc and Dealloc
-    cmd = """
-        using MicroBench, CachedArrays;
-        MicroBench.alloc_tests($totalsize, $arraysize, $fp, $policy)
-    """
-    __run(cmd)
-end
+# for (totalsize, arraysize, fp, policy) in iter
+#     # 1D tests
+#     cmd = """
+#         using MicroBench, CachedArrays;
+#         MicroBench.tests_1d($totalsize, $arraysize, $fp, $policy)
+#     """
+#     __run(cmd)
+#
+#     # Alloc and Dealloc
+#     cmd = """
+#         using MicroBench, CachedArrays;
+#         MicroBench.alloc_tests($totalsize, $arraysize, $fp, $policy)
+#     """
+#     __run(cmd)
+# end
 
 #####
 ##### 2D Tests

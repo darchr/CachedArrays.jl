@@ -6,6 +6,7 @@ export CachedArray, LockedCachedArray, AbstractCachedArray
 import Dates
 
 # Dependencies
+import VectorizationBase
 import DataStructures
 import SIMD
 import MacroTools
@@ -45,7 +46,6 @@ include("utils/findnexttree.jl")
 include("memkind.jl")
 include("allocators.jl")
 include("metadata.jl")
-include("loadstore.jl")
 
 # Heap implementations
 include("memory/memory.jl")

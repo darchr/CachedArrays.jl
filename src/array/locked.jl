@@ -69,17 +69,17 @@ function Base.copyto!(
         srco::Integer,
         N::Integer
     )
-    shallow_fetch!(dest)
+    shallowfetch!(dest)
     return copyto!(unlock(dest), desto, src, srco, N)
 end
 
 function Base.copyto!(dest::LockedCachedArray, src::AbstractArray)
-    shallow_fetch!(dest)
+    shallowfetch!(dest)
     return lock(copyto!(unlock(dest), src))
 end
 
 function Base.copyto!(dest::LockedCachedArray, bc::Broadcast.Broadcasted)
-    shallow_fetch!(dest)
+    shallowfetch!(dest)
     return lock(copyto!(unlock(dest), bc))
 end
 
@@ -89,7 +89,7 @@ function Base.copyto!(
         bc::Broadcast.Broadcasted{<:Broadcast.AbstractArrayStyle{0}}
     )
 
-    shallow_fetch!(dest)
+    shallowfetch!(dest)
     return lock(copyto!(unlock(dest), bc))
 end
 
@@ -102,12 +102,10 @@ MacroTools.@forward LockedCachedArray.array (
     Base.size,
     manager,
     evict!,
-    shallow_fetch!,
-    move_to_remote,
+    shallowfetch!,
 )
 
 # If we prefetch a `LockedCachedArray`, then if the array is fetch, it should be marked
 # as clean.
 prefetch!(A::LockedCachedArray) = prefetch!(A.array; dirty = false)
-shallow_fetch!(A::LockedCachedArray) = shallow_fetch!(A.array)
 

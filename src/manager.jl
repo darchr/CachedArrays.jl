@@ -55,10 +55,10 @@ function CacheManager(
     # If we're in 2LM, pass a nullptr.
     # MemKindAllocator gets swapped to something that throws an error if called.
     if IS_2LM
-        kind = MemKind.Kind(Ptr{Nothing}(0))
+        pmm_allocator = AlignedAllocator()
     else
         # For now, pass 0 - which essentially allows unlimited memory
-        kind = MemKind.create_pmem(path, 0)
+        pmm_allocator = MemKindAllocator(MemKind.create_pmem(path, 0))
     end
 
     local_objects = Dict{UInt,WeakRef}()
@@ -70,7 +70,7 @@ function CacheManager(
 
     # Initialize Heaps
     pmm_heap = CompactHeap(
-        MemKindAllocator(kind),
+        pmm_allocator,
         remotesize;
         pool = PMM,
         minallocation = minallocation
@@ -113,10 +113,14 @@ Base.get(M::CacheManager, block) = M.local_objects[getid(block)].value
 
 # Marking a block as dirty both notifies the policy and sets the objects metadata.
 setdirty!(A, flag::Bool = true) = setdirty!(A, manager(A), flag)
-function setdirty!(A, M::CacheManager, flag::Bool = true)
+function setdirty!(A, M::CacheManager, flag)
     block = metadata(A)
-    setdirty!(block, flag)
-    setdirty!(M.policy, block)
+    # Only need to worry about updating the state of the block and the policy if
+    # this particular object lives in DRAM
+    if getpool(block) == DRAM
+        setdirty!(block, flag)
+        setdirty!(M.policy, block, flag)
+    end
     return nothing
 end
 
@@ -133,8 +137,14 @@ id(A) = getid(metadata(A))
 pool(A) = getpool(metadata(A))
 
 prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
-shallow_fetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
-evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
+shallowfetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
+
+if IS_2LM
+    # No eviction in 2LM
+    evict!(A; kw...) = nothing
+else
+    evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
+end
 
 manager(x) = error("Implement `manager` for $(typeof(x))")
 
@@ -353,7 +363,7 @@ function doeviction!(manager, bytes)
 
     local block
     while true
-        # Pop an item from the LRU
+        # Pop an item from the policy
         push!(stack, fullpop!(manager.policy))
         block = getval(Block, last(stack))
 
@@ -438,7 +448,9 @@ function moveto!(
 
     # Set the dirty flag.
     # If `write_before_read` is true, then we MUST mark this block as dirty.
-    setdirty!(newblock, write_before_read | dirty)
+    flag = write_before_read | dirty
+    setdirty!(newblock, flag)
+    setdirty!(M.policy, newblock, flag)
     return nothing
 end
 

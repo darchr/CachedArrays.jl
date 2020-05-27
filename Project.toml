@@ -12,6 +12,7 @@ Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 MacroTools = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
+VectorizationBase = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 
 [compat]
 julia = "1"

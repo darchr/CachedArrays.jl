@@ -175,7 +175,7 @@ isfree(x::Block) = x.free
 ##### Metadata API
 #####
 
-setdirty!(x::Block, flag::Bool) = (x.dirty = flag)
+setdirty!(x::Block, flag::Bool = true) = (x.dirty = flag)
 isdirty(x::Block) = x.dirty
 getid(x::Block) = x.id
 getpool(x::Block) = x.pool

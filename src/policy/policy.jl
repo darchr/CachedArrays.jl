@@ -10,8 +10,9 @@
 getval(::Type{T}, x::T) where {T} = x
 
 # Policy Hints
-setdirty!(x, meta) = nothing
+setdirty!(x, meta, flag) = nothing
 cheapevict(x, meta) = nothing
 
 include("lru.jl")
 include("random.jl")
+include("select.jl")

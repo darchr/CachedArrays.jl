@@ -211,15 +211,16 @@ end
 ##### The actual entry points
 #####
 
-_evict_string(::CachedArrays.LRU) = "LRU"
+_evict_string(::CachedArrays.Select) = "Select"
 _evict_string(::CachedArrays.RandomPolicy) = "Random"
 
 function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
+    println("Booting")
     # if in 2LM mode, all of the temporary arrays should go into local memory
     if IS_2LM
         # Round up for headroom
         localsize = round(Int, totalsize * 1.5)
-        remotesize = 4096
+        remotesize = 2^24
     # Size local mamory to be a little smaller than the DRAM cache to allow for other
     # program activities that don't belong to our heap.
     else
@@ -227,6 +228,7 @@ function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
         remotesize = DEBUG ? 2 * totalsize : 1_000_000_000_000
     end
 
+    println("Making Manager")
     manager = CachedArrays.CacheManager(
         ENV["JULIA_PMEM_PATH"];
         localsize = localsize,
@@ -236,8 +238,10 @@ function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
         flushpercent = convert(Float32, flushpercent),
         gc_before_evict = false,
     )
+    println("Manager Made")
 
     arrays = alloc_1d(manager, totalsize, arraysize)
+    println("Allocated Arrays")
     mode = IS_2LM ?  "2LM" : "1LM"
 
     # If we have a small total size, do more iterations.
@@ -251,41 +255,41 @@ function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
     ##### Tests to Run
     #####
 
-    # # Sequential Copy
-    # params = BenchmarkParameters(;
-    #     arraydims = size(first(arrays)),
-    #     totalsize = sum(sizeof, arrays),
-    #     flushpercent = flushpercent,
-    #     eviction_policy = _evict_string(eviction_policy),
-    #     # Sample twice per second
-    #     sampletime = Millisecond(500),
-    #     description = "Sequential Copy",
-    #     kernel = string(sequential_copy),
-    #     iterations = iterations,
-    #     mode = mode,
-    #     num_threads = length(default_cpuset())
-    # )
+    # Sequential Copy
+    params = BenchmarkParameters(;
+        arraydims = size(first(arrays)),
+        totalsize = sum(sizeof, arrays),
+        flushpercent = flushpercent,
+        eviction_policy = _evict_string(eviction_policy),
+        # Sample twice per second
+        sampletime = Millisecond(500),
+        description = "Sequential Copy",
+        kernel = string(sequential_copy),
+        iterations = iterations,
+        mode = mode,
+        num_threads = length(default_cpuset())
+    )
 
-    # f = () -> sequential_copy(arrays; iterations = iterations)
-    # runner(f, params)
+    f = () -> sequential_copy(arrays; iterations = iterations)
+    runner(f, params)
 
-    # # Sequential Accumulate
-    # params = BenchmarkParameters(;
-    #     arraydims = size(first(arrays)),
-    #     totalsize = sum(sizeof, arrays),
-    #     flushpercent = flushpercent,
-    #     eviction_policy = _evict_string(eviction_policy),
-    #     # Sample twice per second
-    #     sampletime = Millisecond(500),
-    #     description = "Sequential Accumulate",
-    #     kernel = string(sequential_accumulation),
-    #     iterations = iterations,
-    #     mode = mode,
-    #     num_threads = length(default_cpuset())
-    # )
+    # Sequential Accumulate
+    params = BenchmarkParameters(;
+        arraydims = size(first(arrays)),
+        totalsize = sum(sizeof, arrays),
+        flushpercent = flushpercent,
+        eviction_policy = _evict_string(eviction_policy),
+        # Sample twice per second
+        sampletime = Millisecond(500),
+        description = "Sequential Accumulate",
+        kernel = string(sequential_accumulation),
+        iterations = iterations,
+        mode = mode,
+        num_threads = length(default_cpuset())
+    )
 
-    # f = () -> sequential_accumulation(arrays; iterations = iterations)
-    # runner(f, params)
+    f = () -> sequential_accumulation(arrays; iterations = iterations)
+    runner(f, params)
 
     # Sequential zero
     params = BenchmarkParameters(;
@@ -303,25 +307,25 @@ function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
     )
 
     f = () -> sequential_zero(arrays; iterations = iterations)
-    runner(f, params; force = true)
+    runner(f, params)
 
-    # # Sequential Bump
-    # params = BenchmarkParameters(;
-    #     arraydims = size(first(arrays)),
-    #     totalsize = sum(sizeof, arrays),
-    #     flushpercent = flushpercent,
-    #     eviction_policy = _evict_string(eviction_policy),
-    #     # Sample twice per second
-    #     sampletime = Millisecond(500),
-    #     description = "Sequential Bump",
-    #     kernel = string(sequential_bump),
-    #     iterations = iterations,
-    #     mode = mode,
-    #     num_threads = length(default_cpuset())
-    # )
+    # Sequential Bump
+    params = BenchmarkParameters(;
+        arraydims = size(first(arrays)),
+        totalsize = sum(sizeof, arrays),
+        flushpercent = flushpercent,
+        eviction_policy = _evict_string(eviction_policy),
+        # Sample twice per second
+        sampletime = Millisecond(500),
+        description = "Sequential Bump",
+        kernel = string(sequential_bump),
+        iterations = iterations,
+        mode = mode,
+        num_threads = length(default_cpuset())
+    )
 
-    # f = () -> sequential_bump(arrays)
-    # runner(f, params; force = true)
+    f = () -> sequential_bump(arrays)
+    runner(f, params)
     return nothing
 end
 
@@ -378,13 +382,13 @@ function alloc_tests(totalsize, arraysize, flushpercent, eviction_policy)
 
     # Run once to warm up.
     @show f()
-    runner(f, params; force = true)
+    runner(f, params)
 end
 
 function tests_2d(totalsize, arraysize, flushpercent, eviction_policy)
     if IS_2LM
         localsize = round(Int, 1.5 * totalsize)
-        remotesize = 4096
+        remotesize = 2^24
     else
         localsize = DEBUG ? totalsize >> 1 : 180_000_000_000
         remotesize = DEBUG ? 2 * totalsize : 1_000_000_000_000
@@ -397,7 +401,7 @@ function tests_2d(totalsize, arraysize, flushpercent, eviction_policy)
         # Setup tunables
         policy = eviction_policy,
         flushpercent = convert(Float32, flushpercent),
-        gc_before_evict = false,
+        gc_before_evict = true,
     )
 
     # Setup and get arrays
@@ -427,7 +431,7 @@ function tests_2d(totalsize, arraysize, flushpercent, eviction_policy)
     )
 
     f = () -> matrix_mult_forward(arrays; iterations = iterations)
-    runner(f, params)
+    runner(f, params; force = true)
 
     # Matrix Mult Forward and Backward
     params = BenchmarkParameters(;
@@ -446,5 +450,5 @@ function tests_2d(totalsize, arraysize, flushpercent, eviction_policy)
     )
 
     f = () -> matrix_mult_forward_and_back(arrays; iterations = iterations)
-    runner(f, params)
+    runner(f, params; force = true)
 end

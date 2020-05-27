@@ -15,6 +15,7 @@ _esc(x) = :($(esc(x)))
 
 # Process arguments - see if any want to be unlocked.
 function process(args)
+    pre = []
     processed = []
     annotations = []
     for arg in args
@@ -23,20 +24,25 @@ function process(args)
             if MacroTools.@capture(x, unlock(xs_))
                 push!(annotations, :(unlock($xs)))
                 return xs
+            elseif MacroTools.@capture(x, shallowfetch!(xs_))
+                @show x
+                push!(pre, :(shallowfetch!($xs)))
+                return xs
             else
                 return x
             end
         end
         push!(processed, p)
     end
-    return processed, annotations
+    return pre, processed, annotations
 end
 
 function prefetch_impl(expr::Expr)
     def = MacroTools.splitdef(expr)
     def[:name] = esc(def[:name])
 
-    def[:args], annotations = process(def[:args])
+    pre, processed, annotations = process(def[:args])
+    def[:args] = processed
     names = first.(MacroTools.splitarg.(def[:args]))
 
     prefetch = map(names) do arg
@@ -50,6 +56,7 @@ function prefetch_impl(expr::Expr)
     # Here, we force julia to call the next most specific definition.
     # We just use direct overloading as a trick to get the prefetch calls in.
     def[:body] = quote
+        $(pre...)
         $(prefetch...)
         $(annotations...)
         return $(esc(Base.invoke))(
