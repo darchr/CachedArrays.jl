@@ -1,3 +1,12 @@
+# TODO: New Strategy for swapping pointers
+# When objects register themselves, they will register their `pointer_from_objref` and
+# the offset of their data pointer.
+#
+# For eviction, we sneakily swap out the pointer field.
+#
+# The primary motivation for this is to decrease the total number of allocations and thus
+# hopefully speed up GC times.
+
 # Maintains Cache management.
 mutable struct CacheManager{C,P,Q}
     # Reference to local objects
@@ -11,7 +20,6 @@ mutable struct CacheManager{C,P,Q}
     idcount::UInt
 
     # All objects with remote memory.
-    # Useful for defragmentation.
     remote_objects::Dict{UInt,WeakRef}
     size_of_remote::Int
 
@@ -93,6 +101,7 @@ function CacheManager(
         policy,
         pmm_heap,
         dram_heap,
+
         # tunables,
         flushpercent,
         gc_before_evict,
@@ -371,6 +380,7 @@ function doeviction!(manager, bytes)
     # The eviction callback
     cb = block -> moveto!(PoolType{PMM}(), manager, block)
 
+    # TODO: Since the heap upgrade, we can restructure this.
     local block
     while true
         # Pop an item from the policy
