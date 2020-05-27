@@ -10,6 +10,7 @@ import VectorizationBase
 import DataStructures
 import SIMD
 import MacroTools
+import TimerOutputs
 
 # Control whether asserts are active
 # Default to `true` for now because of development
@@ -17,7 +18,6 @@ const DEBUG = get(ENV, "JULIA_CACHEDARRAYS_DEBUG", true)
 
 # Check ALL array updates for correctness.
 const PEDANTIC = false      # TODO: Currently Broken
-const THREADED_COPY = true
 
 # Flag to indicate if we're in 2LM.
 # If we are, configure the system to error if we ever try to allocate remote memory.
@@ -38,8 +38,35 @@ else
     end
 end
 
+#####
+##### Optional Timing
+#####
+
+const ENABLETIMING = true
+@static if ENABLETIMING
+    const GLOBAL_TIMER = TimerOutputs.TimerOutput()
+    macro timeit(label, expr)
+        return :(TimerOutputs.@timeit $(esc(GLOBAL_TIMER)) $(esc(label)) $(esc(expr)))
+    end
+
+    # Timing Functions
+    reset_timer!() = TimerOutputs.reset_timer!(GLOBAL_TIMER)
+    gettimer() = GLOBAL_TIMER
+else
+    macro timeit(label, expr)
+        return :($(esc(expr)))
+    end
+
+    reset_timer!() = nothing
+    gettimer() = nothing
+end
+
 # This turns out to be surprisingly useful ...
 donothing(x...) = nothing
+
+#####
+##### includes
+#####
 
 # Bootstrap Utilities
 include("utils/findnexttree.jl")
@@ -63,6 +90,10 @@ include("array/locked.jl")
 # Fast "memcpy"
 include("memcpy.jl")
 include("lib.jl")
+
+#####
+##### Keep track of Managers
+#####
 
 # When Managers get created - hold them in a global array to keep them from getting
 # GC'd before the arrays they track.

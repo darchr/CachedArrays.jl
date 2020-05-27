@@ -37,7 +37,7 @@ function CompactHeap(
 
     minallocation = poweroftwo(minallocation)
 
-    # Round down size to the nearest multiple of `COMPACTHEAP_GRANULARITY`
+    # Round down size to the nearest multiple of `minallocation`
     sz = (sz >> minallocation.val) << minallocation.val
 
     # Allocate the memory managed by this heap
@@ -126,7 +126,6 @@ end
 #
 # Assume `sz` is a multiple of the heap granularity
 function Base.pop!(heap::CompactHeap, bin)
-    #list = get(heap.freelists, bin, nothing)
     list = heap.freelists[bin]
     if !isempty(list)
         return popfreelist!(heap, list, bin)

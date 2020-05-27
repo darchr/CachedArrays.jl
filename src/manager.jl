@@ -291,12 +291,16 @@ function unsafe_alloc(
         id::UInt = getid(manager),
     ) where {T,N}
 
-    ptr = alloc(manager.pmm_heap, bytes, id)
-
-    # If we still don't have anything, run a full GC.
-    if isnothing(ptr)
-        GC.gc(true)
+    @timeit "PMM Alloc" begin
         ptr = alloc(manager.pmm_heap, bytes, id)
+
+        # If we still don't have anything, run a full GC.
+        if isnothing(ptr)
+            @timeit "PMM Alloc GC" begin
+                GC.gc(true)
+                ptr = alloc(manager.pmm_heap, bytes, id)
+            end
+        end
     end
 
     if isnothing(ptr)
@@ -325,17 +329,23 @@ function unsafe_alloc(
         id::UInt = getid(manager),
     )
 
-    ptr = alloc(manager.dram_heap, bytes, id)
-
-    # If allocation failed, try a GC
-    if manager.gc_before_evict && isnothing(ptr)
-        GC.gc(true)
+    @timeit "DRAM Alloc" begin
         ptr = alloc(manager.dram_heap, bytes, id)
-    end
 
-    if isnothing(ptr)
-        doeviction!(manager, bytes)
-        ptr = alloc(manager.dram_heap, bytes, id)
+        # If allocation failed, try a GC
+        if manager.gc_before_evict && isnothing(ptr)
+            @timeit "DRAM Alloc GC" begin
+                GC.gc(true)
+                ptr = alloc(manager.dram_heap, bytes, id)
+            end
+        end
+
+        if isnothing(ptr)
+            @timeit "DRAM Alloc Eviction" begin
+                doeviction!(manager, bytes)
+                ptr = alloc(manager.dram_heap, bytes, id)
+            end
+        end
     end
 
     if isnothing(ptr)
