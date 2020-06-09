@@ -49,7 +49,6 @@ struct PoolType{T} end
 
 struct Block <: AbstractMetadata
     ptr::Ptr{Nothing}
-
     # Inner constructor for ambiguity resolution
     Block(ptr::Ptr{Nothing}) = new(ptr)
 end
@@ -57,6 +56,8 @@ end
 Block() = Block(Ptr{Nothing}(0))
 Block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr))
 Block(address::UInt) = Block(Ptr{Nothing}(address))
+
+Base.length(block) = block.size - headersize()
 
 Base.pointer(x::Block) = getfield(x, :ptr)
 datapointer(x::Block) = pointer(x) + headersize()

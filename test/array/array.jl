@@ -12,6 +12,17 @@ function gctest(manager)
     @test A == B
     @test length(A) == len
 
+    # Make sure `dataptr` works correctly.
+    #
+    # The strategy here is to use introspection to find the `ptr` field of a CachedArray.
+    # We then use the number of this field to compute what the data pointer should be.
+    #
+    # This will be robust around changing the location of the data pointer.
+    fieldnumber = findfirst(i -> fieldname(typeof(A), i) == :ptr, 1:fieldcount(typeof(A)))
+    @test !isnothing(fieldnumber)
+    offset = fieldoffset(typeof(A), fieldnumber)
+    @test CachedArrays.datapointer(A) == pointer_from_objref(A) + offset
+
     # Internal detail
     @test CachedArrays.pool(A) == DRAM
 

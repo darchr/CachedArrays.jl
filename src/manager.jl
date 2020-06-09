@@ -13,14 +13,14 @@ mutable struct CacheManager{C,P,Q}
     #
     # NOTE: Make sure that the manager is updated whenever an object that enters itself
     # into the cache is finalized.
-    local_objects::Dict{UInt,WeakRef}
+    local_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
     size_of_local::Int
 
     # Create a new ID for each object registerd in the cache.
     idcount::UInt
 
     # All objects with remote memory.
-    remote_objects::Dict{UInt,WeakRef}
+    remote_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
     size_of_remote::Int
 
     # local datastructures
@@ -69,11 +69,11 @@ function CacheManager(
         pmm_allocator = MemKindAllocator(MemKind.create_pmem(path, 0))
     end
 
-    local_objects = Dict{UInt,WeakRef}()
+    local_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
     size_of_local = 0
     idcount = one(UInt)
 
-    remote_objects = Dict{UInt,WeakRef}()
+    remote_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
     size_of_remote = 0
 
     # Initialize Heaps
@@ -114,7 +114,7 @@ function CacheManager(
 end
 
 # Get the block for the given object.
-Base.get(M::CacheManager, block) = M.local_objects[getid(block)].value
+#Base.get(M::CacheManager, block) = M.local_objects[getid(block)].value
 
 #####
 ##### Policy Hints
@@ -122,7 +122,9 @@ Base.get(M::CacheManager, block) = M.local_objects[getid(block)].value
 
 # Marking a block as dirty both notifies the policy and sets the objects metadata.
 setdirty!(A, flag::Bool = true) = setdirty!(A, manager(A), flag)
-function setdirty!(A, M::CacheManager, flag)
+setdirty!(A, M::CacheManager, flag) = setdirty!(metadata(A), M, flag)
+
+function setdirty!(block::Block, M::CacheManager, flag)
     block = metadata(A)
     # Only need to worry about updating the state of the block and the policy if
     # this particular object lives in DRAM
@@ -202,50 +204,48 @@ function register!(M::CacheManager, A)
     return nothing
 end
 
-function register!(::PoolType{DRAM}, M::CacheManager, A)
-    block = metadata(A)
+# Top level entry points
+register!(pool, M::CacheManager, A) = register!(pool, M, metadata(A), datapointer(A))
+unregister!(pool, M::CacheManager, A) = unregister!(pool, M, metadata(A))
 
+## DRAM
+function register!(::PoolType{DRAM}, M::CacheManager, block::Block, ptr)
     # Correctness Checks
     @check block.pool == DRAM
     @check !haskey(M.local_objects, getid(block))
 
     # Add to local data structures
     push!(M.policy, block)
-    M.local_objects[getid(block)] = WeakRef(A)
-    M.size_of_local += sizeof(A)
+    M.local_objects[getid(block)] = convert(Ptr{Ptr{Nothing}}, ptr)
+    M.size_of_local += length(block)
     return nothing
 end
 
 update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, metadata(A))
 
-function unregister!(::PoolType{DRAM}, M::CacheManager, A)
-    block = metadata(A)
-
+function unregister!(::PoolType{DRAM}, M::CacheManager, block::Block)
     # Correctness checks
     @check haskey(M.local_objects, getid(block))
 
     delete!(M.local_objects, getid(block))
     in(block, M.policy) && delete!(M.policy, block)
-    M.size_of_local -= sizeof(A)
+    M.size_of_local -= length(block)
     return nothing
 end
 
-function register!(::PoolType{PMM}, M::CacheManager, A)
-    block = metadata(A)
-
+## PMM
+function register!(::PoolType{PMM}, M::CacheManager, block::Block, ptr)
     @check !haskey(M.remote_objects, getid(block))
     @check block.pool == PMM
-    M.remote_objects[getid(block)] = WeakRef(A)
-    M.size_of_remote += sizeof(A)
+    M.remote_objects[getid(block)] = ptr
+    M.size_of_remote += length(block)
     return nothing
 end
 
-function unregister!(::PoolType{PMM}, M::CacheManager, A)
-    block = metadata(A)
-
+function unregister!(::PoolType{PMM}, M::CacheManager, block::Block)
     @check haskey(M.remote_objects, getid(block))
     delete!(M.remote_objects, getid(block))
-    M.size_of_remote -= sizeof(A)
+    M.size_of_remote -= length(block)
     return nothing
 end
 
@@ -253,12 +253,12 @@ end
 ##### Cleanup Finalizer
 #####
 
-const CLEANUP_LIST = UInt[]
+#const CLEANUP_LIST = UInt[]
 
 function cleanup(A, M = manager(A))
     # Get the block for this object.
     block = metadata(A)
-    push!(CLEANUP_LIST, getid(block))
+    #push!(CLEANUP_LIST, getid(block))
 
     # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
     # be an error.
@@ -290,6 +290,7 @@ end
 ##### Allocate remote arrays
 #####
 
+# TODO: Deprecate?
 unsafe_alloc(::Type{T}, x...; kw...) where {T} = convert(Ptr{T}, unsafe_alloc(x...; kw...))
 
 # Remote alloc without a finalizer
@@ -378,7 +379,7 @@ function doeviction!(manager, bytes)
     stack = fulleltype(manager.policy)[]
 
     # The eviction callback
-    cb = block -> moveto!(PoolType{PMM}(), manager, block)
+    cb = block -> moveto!(PoolType{PMM}(), block, manager)
 
     # TODO: Since the heap upgrade, we can restructure this.
     local block
@@ -421,19 +422,19 @@ end
 ##### Moving Objects
 #####
 
+moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
+
 function moveto!(
         ::PoolType{DRAM},
-        A,
-        M = manager(A);
+        block::Block,
+        M::CacheManager;
         dirty = true,
         write_before_read = false
     )
-    # Get the metadata for this object.
-    block = metadata(A)
-
     # If the data is already local, mark a usage and return.
     if getpool(block) == DRAM
-        update!(PoolType{DRAM}(), M, A)
+        # TODO: Fix
+        #update!(PoolType{DRAM}(), M, A)
         return nothing
     end
 
@@ -441,18 +442,12 @@ function moveto!(
     @check isnothing(getsibling(block))
 
     # Otherwise, we need to allocate some local data for it.
-    storage_ptr = unsafe_alloc(
-        eltype(A),
-        PoolType{DRAM}(),
-        M,
-        sizeof(A),
-        getid(block),
-    )
+    storage_ptr = unsafe_alloc(PoolType{DRAM}(), M, length(block), getid(block))
 
     # If we're assured that we're doing a write before a read, then we can avoid
     # copying over the the remote storage
     if !write_before_read
-        _memcpy!(storage_ptr, pointer(A), length(A))
+        _memcpy!(storage_ptr, datapointer(block), length(block))
     end
 
     # Get the block for the newly created Array.
@@ -461,10 +456,12 @@ function moveto!(
 
     setsibling!(newblock, block)
     setsibling!(block, newblock)
-    replace!(A, storage_ptr)
+    ptr = M.remote_objects[getid(block)]
+    unsafe_store!(ptr, storage_ptr)
+    #replace!(A, storage_ptr)
 
     # Track this object
-    register!(PoolType{DRAM}(), M, A)
+    register!(PoolType{DRAM}(), M, newblock, ptr)
 
     # Set the dirty flag.
     # If `write_before_read` is true, then we MUST mark this block as dirty.
@@ -474,13 +471,7 @@ function moveto!(
     return nothing
 end
 
-function moveto!(pool::PoolType{PMM}, manager::CacheManager, block)
-    return moveto!(pool, get(manager, block), manager)
-end
-
-function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
-    block = metadata(A)
-
+function moveto!(::PoolType{PMM}, block::Block, M::CacheManager)
     # If already in PMM, do nothing
     getpool(block) == PMM && return nothing
     sibling = getsibling(block)
@@ -489,24 +480,28 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
     # Otherwise, we have to write back.
     createstorage = isnothing(sibling)
     if createstorage
-        storage_ptr = unsafe_alloc(eltype(A), PoolType{PMM}(), M, sizeof(A), getid(block))
+        storage_ptr = unsafe_alloc(PoolType{PMM}(), M, length(block), getid(block))
         sibling = unsafe_block(storage_ptr)
     else
-        storage_ptr = convert(Ptr{eltype(A)}, datapointer(sibling))
+        storage_ptr = datapointer(sibling)
     end
 
     @check getid(sibling) == getid(block)
 
     if isdirty(block) || createstorage
-        # Since `storage_ptr` is just a pointer,, we have to manually inform the copy engine
+        # Since `storage_ptr` is just a pointer, we have to manually inform the copy engine
         # how many threads to use.
         nthreads = min(Threads.nthreads(), 4)
-        _memcpy!(storage_ptr, pointer(A), length(A); nthreads = nthreads)
+        _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
     end
 
     # Deregister this object from local tracking.
-    unregister!(PoolType{DRAM}(), M, A)
-    replace!(A, storage_ptr)
+    # First, get the pointer to the data we are replacing.
+    ptr = M.local_objects[getid(block)]
+    unregister!(PoolType{DRAM}(), M, block)
+
+    # Now - swap data at this pointer.
+    unsafe_store!(ptr, storage_ptr)
 
     # Free the block we just removed.
     free(PoolType{DRAM}(), M, block)
@@ -514,7 +509,7 @@ function moveto!(::PoolType{PMM}, A, M::CacheManager = manager(A))
 
     # If we created storage for this array, we need to register the array in the remote
     # storage tracking.
-    createstorage && register!(PoolType{PMM}(), M, A)
+    createstorage && register!(PoolType{PMM}(), M, sibling, ptr)
     return nothing
 end
 

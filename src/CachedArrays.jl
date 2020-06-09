@@ -42,7 +42,7 @@ end
 ##### Optional Timing
 #####
 
-const ENABLETIMING = true
+const ENABLETIMING = false
 @static if ENABLETIMING
     const GLOBAL_TIMER = TimerOutputs.TimerOutput()
     macro timeit(label, expr)

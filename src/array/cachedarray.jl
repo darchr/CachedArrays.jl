@@ -26,6 +26,9 @@ mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
     end
 end
 
+# Get a pointer to the `ptr` field of a CachedArray object.
+datapointer(A::CachedArray) = pointer_from_objref(A) + fieldoffset(typeof(A), 1)
+
 #####
 ##### `Cacheable` Interface
 #####

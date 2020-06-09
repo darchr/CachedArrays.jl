@@ -4,33 +4,40 @@
     PoolType = CachedArrays.PoolType
 
     GC.gc(true)
+    minallocation = 12
     manager = CachedArrays.CacheManager(
         @__DIR__;
         localsize = 2^20,
         remotesize = 2^20,
-        minallocation = 12
+        minallocation = minallocation
     )
 
     @test length(manager.local_objects) == 0
     @test length(manager.remote_objects) == 0
 
     A = CachedArray{UInt8}(undef, manager, (500000,))
-    @test CachedArrays.localsize(manager) == sizeof(A)
+    # Actual allocation should be within 2^minallocation of the actual size of A
+    @test CachedArrays.localsize(manager) >= sizeof(A)
+    @test CachedArrays.localsize(manager) <= sizeof(A) + 1 * (2^minallocation)
     @test CachedArrays.pool(A) == DRAM
     if CachedArrays.DEBUG
         @test_throws AssertionError CachedArrays.register!(PoolType{DRAM}(), manager, A)
     end
 
     B = CachedArray{UInt8}(undef, manager, (300000,))
-    @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(B)
+    @test CachedArrays.localsize(manager) >= sizeof(A) + sizeof(B)
+    @test CachedArrays.localsize(manager) <= sizeof(A) + sizeof(B) + 2 * (2^minallocation)
     @test CachedArrays.remotesize(manager) == 0
     @test CachedArrays.pool(A) == DRAM
     @test CachedArrays.pool(B) == DRAM
 
     # When we insert C, A should be evicted.
     C = CachedArray{UInt8}(undef, manager, (500000,))
-    @test CachedArrays.localsize(manager) == sizeof(B) + sizeof(C)
-    @test CachedArrays.remotesize(manager) == sizeof(A)
+    @test CachedArrays.localsize(manager) >= sizeof(B) + sizeof(C)
+    @test CachedArrays.localsize(manager) <= sizeof(B) + sizeof(C) + 2 * (2^minallocation)
+    @test CachedArrays.remotesize(manager) >= sizeof(A)
+    @test CachedArrays.remotesize(manager) <= sizeof(A) + 1 * (2^minallocation)
+
     @test CachedArrays.pool(A) == PMM
     @test CachedArrays.pool(B) == DRAM
     @test CachedArrays.pool(C) == DRAM
@@ -42,8 +49,11 @@
     # C should stay in the cache.
     CachedArrays.prefetch!(A)
     @test pointer(A) != pointer(C)
-    @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(C)
-    @test CachedArrays.remotesize(manager) == sizeof(B) + sizeof(A)
+    @test CachedArrays.localsize(manager) >= sizeof(A) + sizeof(C)
+    @test CachedArrays.localsize(manager) <= sizeof(A) + sizeof(C) + 2 * (2^minallocation)
+    @test CachedArrays.remotesize(manager) >= sizeof(B) + sizeof(A)
+    @test CachedArrays.remotesize(manager) <= sizeof(B) + sizeof(A) + 2 * (2^minallocation)
+
     @test CachedArrays.pool(A) == DRAM
     @test CachedArrays.pool(B) == PMM
     @test CachedArrays.pool(C) == DRAM
