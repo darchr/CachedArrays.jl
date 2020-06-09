@@ -28,10 +28,7 @@ function gctest(manager)
 
     # Make sure the global manager is updated correctly.
     @test CachedArrays.inlocal(manager, A)
-    @test CachedArrays.localsize(manager) == sizeof(A)
-
     @test !CachedArrays.inremote(manager, A)
-    @test CachedArrays.remotesize(manager) == 0
 
     # Evict this object.
     CachedArrays.evict!(A)
@@ -41,10 +38,8 @@ function gctest(manager)
 
     # Make sure the cache gets updated.
     @test !CachedArrays.inlocal(manager, A)
-    @test CachedArrays.localsize(manager) == 0
 
     @test CachedArrays.inremote(manager, A)
-    @test CachedArrays.remotesize(manager) ==  sizeof(A)
 
     # Now prefetch the array back
     CachedArrays.prefetch!(A)
@@ -52,11 +47,8 @@ function gctest(manager)
 
     # The cache maanger should now have this array stored at both locations.
     @test CachedArrays.inlocal(manager, A)
-    @test CachedArrays.localsize(manager) == sizeof(A)
 
     @test CachedArrays.inremote(manager, A)
-    @test CachedArrays.remotesize(manager) == sizeof(A)
-
     return nothing
 end
 
@@ -93,7 +85,8 @@ end
         A .= vA
         B .= vB
 
-        @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(B)
+        @test CachedArrays.inlocal(manager, A)
+        @test CachedArrays.inlocal(manager, B)
         @test CachedArrays.remotesize(manager) == 0
 
         # Do a broadcasting add - make sure the newly created object is a CachedArray
@@ -101,7 +94,9 @@ end
         C = A .+ B
         @test isa(C, CachedArray)
         @test length(manager.local_objects) == 3
-        @test CachedArrays.localsize(manager) == sizeof(A) + sizeof(B) + sizeof(C)
+        @test CachedArrays.inlocal(manager, A)
+        @test CachedArrays.inlocal(manager, B)
+        @test CachedArrays.inlocal(manager, C)
 
         # Now do some timing to make sure the overhead of CachedArrays isn't stupid.
         f!(C,A,B) = C .= A .+ B

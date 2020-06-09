@@ -98,6 +98,7 @@ end
 #####
 
 MacroTools.@forward LockedCachedArray.array (
+    datapointer,
     Base.pointer,
     Base.size,
     manager,

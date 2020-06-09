@@ -17,26 +17,27 @@
 
     A = CachedArray{UInt8}(undef, manager, (500000,))
     # Actual allocation should be within 2^minallocation of the actual size of A
-    @test CachedArrays.localsize(manager) >= sizeof(A)
-    @test CachedArrays.localsize(manager) <= sizeof(A) + 1 * (2^minallocation)
+    @test CachedArrays.inlocal(manager, A)
     @test CachedArrays.pool(A) == DRAM
     if CachedArrays.DEBUG
         @test_throws AssertionError CachedArrays.register!(PoolType{DRAM}(), manager, A)
     end
 
     B = CachedArray{UInt8}(undef, manager, (300000,))
-    @test CachedArrays.localsize(manager) >= sizeof(A) + sizeof(B)
-    @test CachedArrays.localsize(manager) <= sizeof(A) + sizeof(B) + 2 * (2^minallocation)
-    @test CachedArrays.remotesize(manager) == 0
+    @test CachedArrays.inlocal(manager, A)
+    @test CachedArrays.inlocal(manager, B)
+
+    @test isempty(manager.remote_objects) == true
     @test CachedArrays.pool(A) == DRAM
     @test CachedArrays.pool(B) == DRAM
 
     # When we insert C, A should be evicted.
     C = CachedArray{UInt8}(undef, manager, (500000,))
-    @test CachedArrays.localsize(manager) >= sizeof(B) + sizeof(C)
-    @test CachedArrays.localsize(manager) <= sizeof(B) + sizeof(C) + 2 * (2^minallocation)
-    @test CachedArrays.remotesize(manager) >= sizeof(A)
-    @test CachedArrays.remotesize(manager) <= sizeof(A) + 1 * (2^minallocation)
+
+    @test CachedArrays.inlocal(manager, B)
+    @test CachedArrays.inlocal(manager, C)
+    @test !CachedArrays.inlocal(manager, A)
+    @test CachedArrays.inremote(manager, A)
 
     @test CachedArrays.pool(A) == PMM
     @test CachedArrays.pool(B) == DRAM
@@ -49,10 +50,13 @@
     # C should stay in the cache.
     CachedArrays.prefetch!(A)
     @test pointer(A) != pointer(C)
-    @test CachedArrays.localsize(manager) >= sizeof(A) + sizeof(C)
-    @test CachedArrays.localsize(manager) <= sizeof(A) + sizeof(C) + 2 * (2^minallocation)
-    @test CachedArrays.remotesize(manager) >= sizeof(B) + sizeof(A)
-    @test CachedArrays.remotesize(manager) <= sizeof(B) + sizeof(A) + 2 * (2^minallocation)
+    @test CachedArrays.inlocal(manager, A)
+    @test !CachedArrays.inlocal(manager, B)
+    @test CachedArrays.inlocal(manager, C)
+
+    @test CachedArrays.inremote(manager, A)
+    @test CachedArrays.inremote(manager, B)
+    @test !CachedArrays.inremote(manager, C)
 
     @test CachedArrays.pool(A) == DRAM
     @test CachedArrays.pool(B) == PMM
