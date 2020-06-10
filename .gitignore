@@ -5,3 +5,5 @@ tags
 *.swp
 *.jls
 tags.lock
+*.dia~
+build/
