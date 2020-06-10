@@ -28,10 +28,6 @@ mutable struct CacheManager{C,P,Q}
     pmm_heap::P
     dram_heap::Q
 
-    # Keep track of objects that we've force freed.
-    # If they get finalized, don't do any freeing.
-    #force_freed::Set{UInt}
-
     ## local tunables
 
     # We trigger a full GC before trying to evict items from the local cache.
@@ -455,9 +451,10 @@ function moveto!(
 
     setsibling!(newblock, block)
     setsibling!(block, newblock)
+
+    # TODO: Cleanup pointer replacement
     ptr = M.remote_objects[getid(block)]
     unsafe_store!(ptr, storage_ptr)
-    #replace!(A, storage_ptr)
 
     # Track this object
     register!(PoolType{DRAM}(), M, newblock, ptr)

@@ -298,6 +298,28 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
 end
 
 #####
+##### Materializer
+#####
+
+# Touch all the pages in an allocation.
+function materialize_os_pages!(heap::CompactHeap)
+    # First, we must make sure that NOTHING is allocated in the heap - otherwise, we might
+    # over write some existing data.
+    if length(heap) != 1 || !isfree(first(heap))
+        throw(error("Can only materialize OS pages for an empty heap!"))
+    end
+
+    # Now, we threaded touch all pages in the heap
+    #
+    # Take steps of 4096, which is the smallest possible page size.
+    ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
+    Threads.@threads for i in 1:4096:sizeof(heap)
+        unsafe_store!(ptr, one(UInt8), i)
+    end
+    return nothing
+end
+
+#####
 ##### Checker
 #####
 

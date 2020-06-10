@@ -29,6 +29,11 @@ end
 # Get a pointer to the `ptr` field of a CachedArray object.
 datapointer(A::CachedArray) = pointer_from_objref(A) + fieldoffset(typeof(A), 1)
 
+# Simplify Stacktraces
+function Base.show(io::IO, x::Type{<:AbstractCachedArray{T,N}}) where {T,N}
+    print(io, "CachedArrays.CachedArray{$T,$N}")
+end
+
 #####
 ##### `Cacheable` Interface
 #####
@@ -143,4 +148,7 @@ findT(::Type{T}, x) where {T} = nothing
 findT(::Type{T}, ::Tuple{}) where {T} = nothing
 findT(::Type{T}, x::U, rest) where {T, U <: T} = x
 findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
+
+# We hit this case when there's Float32/Float64 confusion ...
+#findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T, U <: T} = x.x
 
