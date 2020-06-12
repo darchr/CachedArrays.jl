@@ -65,6 +65,7 @@ end
     # Run the GC test, then run garbage collection.
     gctest(manager)
     GC.gc(true)
+    CachedArrays._cleanup(manager)
 
     # Wrap this body of code in a "let" block to ensure that GC will clean up any temporary
     # arrays created in the body.
