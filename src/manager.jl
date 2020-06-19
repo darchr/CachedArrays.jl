@@ -405,6 +405,8 @@ function doeviction!(manager, bytes)
         block = getval(Block, last(stack))
 
         canallocfrom(manager.dram_heap, block, bytes) && break
+        
+        # Display the stack because what in the world happened??
         if isempty(manager.policy)
             display(stack)
         end
