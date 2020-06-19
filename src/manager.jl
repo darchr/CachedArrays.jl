@@ -265,8 +265,7 @@ end
 # method below which will put back all of the blocks on the `cleanlist`.
 cleanup(A, M = manager(A)) = push!(M.cleanlist, metadata(A))
 
-# Cleanup gets called by the GC, so will be single threaded by default.
-# No need to acquirethe lock???
+# Put back all items on the clean list.
 function _cleanup(M::CacheManager)
     # Free all blocks in the cleanlist
     for block in M.cleanlist
