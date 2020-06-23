@@ -45,6 +45,9 @@ mutable struct CacheManager{C}
     # TODO: In the future, I'd like to have this be auto-determined by whether GC actually
     # freed anything, but for now set or disable it manually.
     gc_before_evict::Bool
+
+    ## Prevent arrays from moving
+    allow_movement::Bool
 end
 
 function CacheManager(
@@ -91,6 +94,9 @@ function CacheManager(
         minallocation = minallocation
     )
 
+    # Allow movement by default
+    allow_movement = true
+
     # Construct the manager.
     manager = CacheManager(
         local_objects,
@@ -107,6 +113,9 @@ function CacheManager(
         # tunables,
         flushpercent,
         gc_before_evict,
+
+        # runtime settings
+        allow_movement,
     )
 
     # Add this to the global manager list to ensure that it outlives any of its users
@@ -135,6 +144,13 @@ function setdirty!(block::Block, M::CacheManager, flag)
     end
     return nothing
 end
+
+#####
+##### Enable/Disable movement
+#####
+
+enable_movement!(M::CacheManager) = (M.allow_movement = true)
+disable_movement!(M::CacheManager) = (M.allow_movement = false)
 
 #####
 ##### Cacheable API
@@ -306,6 +322,16 @@ end
 # TODO: Deprecate?
 unsafe_alloc(::Type{T}, x...; kw...) where {T} = convert(Ptr{T}, unsafe_alloc(x...; kw...))
 
+# Try to allocate from DRAM first.
+# Then, try to allocate from PMM
+function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
+    ptr = unsafe_alloc(PoolType{DRAM}(), manager, bytes, id)
+    isnothing(ptr) || return ptr
+
+    # No free space. Try to allocate from PMM
+    return unsafe_alloc(PoolType{PMM}(), manager, bytes, id)
+end
+
 # Remote alloc without a finalizer
 function unsafe_alloc(
         ::PoolType{PMM},
@@ -367,18 +393,13 @@ function unsafe_alloc(
             end
         end
 
-        if isnothing(ptr)
+        if isnothing(ptr) && manager.allow_movement
             @timeit "DRAM Alloc Eviction" begin
                 doeviction!(manager, bytes)
                 ptr = alloc(manager.dram_heap, bytes, id)
             end
         end
     end
-
-    if isnothing(ptr)
-        error("Something's gone horribly wrong!")
-    end
-
     return ptr
 end
 

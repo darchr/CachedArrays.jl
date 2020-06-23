@@ -30,9 +30,9 @@ end
 datapointer(A::CachedArray) = pointer_from_objref(A) + fieldoffset(typeof(A), 1)
 
 # Simplify Stacktraces
-function Base.show(io::IO, x::Type{<:AbstractCachedArray{T,N}}) where {T,N}
-    print(io, "CachedArrays.CachedArray{$T,$N}")
-end
+#function Base.show(io::IO, x::Type{<:AbstractCachedArray{T,N}}) where {T,N}
+#    print(io, "CachedArrays.CachedArray{$T,$N}")
+#end
 
 #####
 ##### `Cacheable` Interface
@@ -64,7 +64,7 @@ CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
 
 function CachedArray{T,N}(x::Array{T,N}, manager::C) where {T,N,C}
     ptr = lock(manager.lock) do
-        unsafe_alloc(T, PoolType{DRAM}(), manager, sizeof(x))
+        unsafe_alloc(T, manager, sizeof(x))
     end
 
     unsafe_copyto!(ptr, pointer(x), length(x))
@@ -76,8 +76,9 @@ function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
 end
 
 function CachedArray{T}(::UndefInitializer, manager::C, dims::NTuple{N,Int}) where {T,N,C}
+    isbitstype(T) || error("Can only create CachedArrays of `isbitstypes`!")
     ptr = lock(manager.lock) do
-        unsafe_alloc(T, PoolType{DRAM}(), manager, prod(dims) * sizeof(T))
+        unsafe_alloc(T, manager, prod(dims) * sizeof(T))
     end
     A = CachedArray{T,N,C}(ptr, dims, manager)
     return A
@@ -155,5 +156,5 @@ findT(::Type{T}, x::U, rest) where {T, U <: T} = x
 findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
 
 # We hit this case when there's Float32/Float64 confusion ...
-#findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T, U <: T} = x.x
+findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T, U <: T} = x.x
 

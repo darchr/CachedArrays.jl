@@ -8,7 +8,7 @@
     manager = CachedArrays.CacheManager(
         @__DIR__;
         localsize = 2^20,
-        remotesize = 2^20,
+        remotesize = 2^22,
         minallocation = minallocation
     )
 
@@ -61,6 +61,26 @@
     @test CachedArrays.pool(A) == DRAM
     @test CachedArrays.pool(B) == PMM
     @test CachedArrays.pool(C) == DRAM
+
+    # Now - test that locking movement works correctly.
+    # If we disable movement and then allocate a new array, it should be allocated in PMM
+    CachedArrays.disable_movement!(manager)
+    D = similar(B)
+
+    @test CachedArrays.pool(A) == DRAM
+    @test CachedArrays.pool(B) == PMM
+    @test CachedArrays.pool(C) == DRAM
+    @test CachedArrays.pool(D) == PMM
+
+    # If we renable movement - then a new allocation should happen in DRAM with an evicion.
+    CachedArrays.enable_movement!(manager)
+    E = similar(B)
+
+    @test CachedArrays.pool(A) == DRAM
+    @test CachedArrays.pool(B) == PMM
+    @test CachedArrays.pool(C) == PMM
+    @test CachedArrays.pool(D) == PMM
+    @test CachedArrays.pool(E) == DRAM
 end
 
 @testset "Testing Manager Cleanup" begin
