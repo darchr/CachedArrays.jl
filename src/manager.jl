@@ -31,7 +31,6 @@ mutable struct CacheManager{C}
 
     # Synchronize access ...
     lock::ReentrantLock
-    cleanlock::ReentrantLock
 
     ## local tunables
 
@@ -110,7 +109,6 @@ function CacheManager(
         dram_heap,
         Block[],
         ReentrantLock(),
-        ReentrantLock(),
 
         # tunables,
         flushpercent,
@@ -125,9 +123,6 @@ function CacheManager(
 
     return manager
 end
-
-# Get the block for the given object.
-#Base.get(M::CacheManager, block) = M.local_objects[getid(block)].value
 
 #####
 ##### Policy Hints
@@ -285,43 +280,52 @@ end
 #
 # When we're trying to allocate (i.e., holding the lock) - THEN we'll call the `_cleanup`
 # method below which will put back all of the blocks on the `cleanlist`.
-function cleanup(A, M = manager(A))
-    lock(M.cleanlock) do
-        push!(M.cleanlist, metadata(A))
-    end
-end
+cleanup(A, M = manager(A)) = push!(M.cleanlist, metadata(A))
 
 # Put back all items on the clean list.
 function _cleanup(M::CacheManager)
-    lock(M.cleanlock) do
-        # Free all blocks in the cleanlist
-        for block in M.cleanlist
-            # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
-            # be an error.
-            pool = getpool(block)
-            if pool == PMM
-                @check isnothing(getsibling(block))
-
-                # Deregister from PMM
-                unregister!(PoolType{PMM}(), M, block)
-                # Free this buffer
-                free(PoolType{PMM}(), M, block)
-            elseif pool == DRAM
-                unregister!(PoolType{DRAM}(), M, block)
-
-                # Does this block have a sibling?
-                sibling = getsibling(block)
-                if !isnothing(sibling)
-                    @check getid(block) == getid(sibling)
-                    @check getpool(sibling) == PMM
-                    unregister!(PoolType{PMM}(), M, block)
-                    free(PoolType{PMM}(), M, sibling)
-                end
-                free(PoolType{DRAM}(), M, block)
-            end
+    # Free all blocks in the cleanlist
+    for block in M.cleanlist
+        # Blocks in the cleanlist can become free if the GC runs while eviction is happening.
+        # If that is the case, then the block should:
+        #
+        # 1. Be marked as free
+        # 2. Belong to DRAM
+        # 3. Have the `evicting` tag set.
+        #
+        # If these criteria are set, we don't have any further work we need to do to
+        # process this block.
+        if isfree(block)
+            @check getpool(block) == DRAM
+            @check block.evicting
+            continue
         end
-        empty!(M.cleanlist)
+
+        # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
+        # be an error.
+        pool = getpool(block)
+        if pool == PMM
+            @check isnothing(getsibling(block))
+
+            # Deregister from PMM
+            unregister!(PoolType{PMM}(), M, block)
+            # Free this buffer
+            free(PoolType{PMM}(), M, block)
+        elseif pool == DRAM
+            unregister!(PoolType{DRAM}(), M, block)
+
+            # Does this block have a sibling?
+            sibling = getsibling(block)
+            if !isnothing(sibling)
+                @check getid(block) == getid(sibling)
+                @check getpool(sibling) == PMM
+                unregister!(PoolType{PMM}(), M, block)
+                free(PoolType{PMM}(), M, sibling)
+            end
+            free(PoolType{DRAM}(), M, block)
+        end
     end
+    empty!(M.cleanlist)
     return nothing
 end
 
