@@ -31,6 +31,7 @@ mutable struct CacheManager{C}
 
     # Synchronize access ...
     lock::ReentrantLock
+    cleanlock::ReentrantLock
 
     ## local tunables
 
@@ -108,6 +109,7 @@ function CacheManager(
         pmm_heap,
         dram_heap,
         Block[],
+        ReentrantLock(),
         ReentrantLock(),
 
         # tunables,
@@ -283,47 +285,43 @@ end
 #
 # When we're trying to allocate (i.e., holding the lock) - THEN we'll call the `_cleanup`
 # method below which will put back all of the blocks on the `cleanlist`.
-cleanup(A, M = manager(A)) = push!(M.cleanlist, metadata(A))
+function cleanup(A, M = manager(A))
+    lock(M.cleanlock) do
+        push!(M.cleanlist, metadata(A))
+    end
+end
 
 # Put back all items on the clean list.
 function _cleanup(M::CacheManager)
-    # Make sure no garbage collection happens because that might
-    # mess with the cleanlist
-    #
-    # NOTE: MUST reenable GC after we're done cleaning.
-    GC.enable(false)
+    lock(M.cleanlock) do
+        # Free all blocks in the cleanlist
+        for block in M.cleanlist
+            # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
+            # be an error.
+            pool = getpool(block)
+            if pool == PMM
+                @check isnothing(getsibling(block))
 
-    # Free all blocks in the cleanlist
-    for block in M.cleanlist
-        # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
-        # be an error.
-        pool = getpool(block)
-        if pool == PMM
-            @check isnothing(getsibling(block))
-
-            # Deregister from PMM
-            unregister!(PoolType{PMM}(), M, block)
-            # Free this buffer
-            free(PoolType{PMM}(), M, block)
-        elseif pool == DRAM
-            unregister!(PoolType{DRAM}(), M, block)
-
-            # Does this block have a sibling?
-            sibling = getsibling(block)
-            if !isnothing(sibling)
-                @check getid(block) == getid(sibling)
-                @check getpool(sibling) == PMM
+                # Deregister from PMM
                 unregister!(PoolType{PMM}(), M, block)
-                free(PoolType{PMM}(), M, sibling)
+                # Free this buffer
+                free(PoolType{PMM}(), M, block)
+            elseif pool == DRAM
+                unregister!(PoolType{DRAM}(), M, block)
+
+                # Does this block have a sibling?
+                sibling = getsibling(block)
+                if !isnothing(sibling)
+                    @check getid(block) == getid(sibling)
+                    @check getpool(sibling) == PMM
+                    unregister!(PoolType{PMM}(), M, block)
+                    free(PoolType{PMM}(), M, sibling)
+                end
+                free(PoolType{DRAM}(), M, block)
             end
-            free(PoolType{DRAM}(), M, block)
         end
+        empty!(M.cleanlist)
     end
-    empty!(M.cleanlist)
-
-    # Matching enable to the disable above.
-    GC.enable(true)
-
     return nothing
 end
 
@@ -419,7 +417,7 @@ free_convert(x::Array) = pointer(x)
 free_convert(x::Ptr) = convert(Ptr{Nothing}, x)
 free_convert(x::Block) = datapointer(x)
 
-free(pool, manager::CacheManager, x) = free(pool, manager, free_convert(x))
+free(pool::PoolType, manager::CacheManager, x) = free(pool, manager, free_convert(x))
 free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.dram_heap, ptr)
 free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.pmm_heap, ptr)
 
