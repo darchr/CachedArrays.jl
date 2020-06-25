@@ -138,12 +138,17 @@ function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}; nthreads = noth
 end
 
 function _memcpy!(dest::Ptr{T}, src::Ptr{T}, len; kw...) where {T}
+    iszero(sizeof(T)) && error("Cannot move items of type $T")
     return _memcpy!(
         convert(Ptr{UInt8}, dest),
         convert(Ptr{UInt8}, src),
         sizeof(T) * len;
         kw...
     )
+end
+
+function _memcpy!(dest::Ptr{Nothing}, src::Ptr{Nothing}, len; kw...)
+    return _memcpy!(convert(Ptr{UInt8}, dest), convert(Ptr{UInt8}, src), len; kw...)
 end
 
 function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)

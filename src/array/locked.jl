@@ -110,3 +110,9 @@ MacroTools.@forward LockedCachedArray.array (
 # as clean.
 prefetch!(A::LockedCachedArray) = prefetch!(A.array; dirty = false)
 
+#####
+##### Unlocking Definitions
+#####
+
+Random.rand!(rng::Random.AbstractRNG, A::LockedCachedArray) = Random.rand!(rng, unlock(A))
+Random.randn!(rng::Random.AbstractRNG, A::LockedCachedArray) = Random.randn!(rng, unlock(A))

@@ -35,6 +35,7 @@ function gctest(manager)
 
     # Make sure our query functions work
     @test CachedArrays.pool(A) == PMM
+    @test A == B
 
     # Make sure the cache gets updated.
     @test !CachedArrays.inlocal(manager, A)
@@ -44,6 +45,7 @@ function gctest(manager)
     # Now prefetch the array back
     CachedArrays.prefetch!(A)
     @test CachedArrays.pool(A) == DRAM
+    @test A == B
 
     # The cache maanger should now have this array stored at both locations.
     @test CachedArrays.inlocal(manager, A)

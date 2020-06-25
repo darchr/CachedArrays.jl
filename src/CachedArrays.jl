@@ -4,6 +4,7 @@ export CachedArray, LockedCachedArray, AbstractCachedArray
 
 # stdlib
 import Dates
+import Random
 
 # Dependencies
 import VectorizationBase
@@ -42,7 +43,7 @@ end
 ##### Optional Timing
 #####
 
-const ENABLETIMING = false
+const ENABLETIMING = true
 @static if ENABLETIMING
     const GLOBAL_TIMER = TimerOutputs.TimerOutput()
     macro timeit(label, expr)
@@ -63,6 +64,18 @@ end
 
 # This turns out to be surprisingly useful ...
 donothing(x...) = nothing
+
+# Low level timing macro
+macro timens(name, expr)
+    return quote
+        before = time_ns()
+        res = $(esc(expr))
+        after = time_ns()
+        println($name, ": ", Int(after - before), " ns")
+        res
+    end
+end
+
 
 #####
 ##### includes

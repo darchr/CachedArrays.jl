@@ -245,6 +245,10 @@ update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, metadata(A))
 
 function unregister!(::PoolType{DRAM}, M::CacheManager, block::Block)
     # Correctness checks
+    if !haskey(M.local_objects, getid(block))
+        @show getid(block)
+        @show haskey(M.remote_objects, getid(block))
+    end
     @check haskey(M.local_objects, getid(block))
 
     delete!(M.local_objects, getid(block))
@@ -283,6 +287,12 @@ cleanup(A, M = manager(A)) = push!(M.cleanlist, metadata(A))
 
 # Put back all items on the clean list.
 function _cleanup(M::CacheManager)
+    # Make sure no garbage collection happens because that might
+    # mess with the cleanlist
+    #
+    # NOTE: MUST reenable GC after we're done cleaning.
+    GC.enable(false)
+
     # Free all blocks in the cleanlist
     for block in M.cleanlist
         # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
@@ -310,6 +320,9 @@ function _cleanup(M::CacheManager)
         end
     end
     empty!(M.cleanlist)
+
+    # Matching enable to the disable above.
+    GC.enable(true)
 
     return nothing
 end
@@ -426,7 +439,7 @@ function doeviction!(manager, bytes)
         block = getval(Block, last(stack))
 
         canallocfrom(manager.dram_heap, block, bytes) && break
-        
+
         # Display the stack because what in the world happened??
         if isempty(manager.policy)
             display(stack)
@@ -538,6 +551,7 @@ function moveto!(::PoolType{PMM}, block::Block, M::CacheManager)
             nthreads = min(Threads.nthreads(), 4)
             _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
         end
+        #memcheck(block, unsafe_block(storage_ptr))
 
         # Deregister this object from local tracking.
         # First, get the pointer to the data we are replacing.
@@ -557,4 +571,23 @@ function moveto!(::PoolType{PMM}, block::Block, M::CacheManager)
     end
     return nothing
 end
+
+# function memcheck(a::Block, b::Block)
+#     @check length(a) == length(b)
+#     ptra = convert(Ptr{UInt8}, datapointer(a))
+#     ptrb = convert(Ptr{UInt8}, datapointer(a))
+#     for i in 1:length(a)
+#         _a = unsafe_load(ptra, i)
+#         _b = unsafe_load(ptrb, i)
+#         if _a != _b
+#             printstyled(stdout, "Memory Mismatch!\n"; color = :red, bold = true)
+#             println(a)
+#             println(b)
+#             println()
+#             println(_a)
+#             println(_b)
+#             error()
+#         end
+#     end
+# end
 
