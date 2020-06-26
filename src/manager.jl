@@ -7,6 +7,8 @@
 # The primary motivation for this is to decrease the total number of allocations and thus
 # hopefully speed up GC times.
 
+const PMM_ALLOCATOR_TYPE = IS_2LM ? AlignedAllocator : MemKindAllocator
+
 # Maintains Cache management.
 mutable struct CacheManager{C}
     # Reference to local objects
@@ -25,7 +27,7 @@ mutable struct CacheManager{C}
 
     # local datastructures
     policy::C
-    pmm_heap::CompactHeap{MemKindAllocator}
+    pmm_heap::CompactHeap{PMM_ALLOCATOR_TYPE}
     dram_heap::CompactHeap{AlignedAllocator}
     cleanlist::Vector{Block}
 
