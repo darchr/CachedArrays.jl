@@ -2,6 +2,9 @@ module CachedArrays
 
 export CachedArray, LockedCachedArray, AbstractCachedArray
 
+# base
+import Base: @lock
+
 # stdlib
 import Dates
 import Random
@@ -15,7 +18,9 @@ import TimerOutputs
 
 # Control whether asserts are active
 # Default to `true` for now because of development
-const DEBUG = get(ENV, "JULIA_CACHEDARRAYS_DEBUG", true)
+const DEBUG = true
+
+
 
 # Check ALL array updates for correctness.
 const PEDANTIC = false      # TODO: Currently Broken
@@ -24,8 +29,9 @@ const PEDANTIC = false      # TODO: Currently Broken
 # If we are, configure the system to error if we ever try to allocate remote memory.
 _boolparse(x::Bool) = x
 _boolparse(x::String) = parse(Bool, x)
-#const IS_2LM = _boolparse(get(ENV, "JULIA_IS_2LM", false))
-const IS_2LM = true
+
+const IS_2LM = false
+#const IS_2LM = true
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
@@ -33,9 +39,17 @@ const IS_2LM = true
     macro check(ex...)
         return :(@assert($(esc.(ex)...)))
     end
+
+    macro lock(ex...)
+        return :(Base.@lock($(esc.(ex...))))
+    end
 else
     macro check(ex...)
         return :()
+    end
+
+    macro lock(ex...)
+        return :(Base.@lock_nofail($(esc.(ex...))))
     end
 end
 

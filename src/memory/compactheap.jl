@@ -138,7 +138,7 @@ function Base.pop!(heap::CompactHeap, bin)
     # No bigger block available.
     # This means we can't fulfill this request.
     # Return `nothing` to indicate this.
-    isnothing(nextbin) && return nothing
+    nextbin === nothing && return nothing
 
     # Otherwise, pop of this
     block = popfreelist!(heap, nextbin)
@@ -158,7 +158,7 @@ function Base.pop!(heap::CompactHeap, bin)
     block.size = sz
     remainder.backsize = block.size
     next = walknext(heap, remainder)
-    if !isnothing(next)
+    if next !== nothing
         next.backsize = remainder.size
     end
 
@@ -183,20 +183,20 @@ function putback!(heap::CompactHeap, block::Block)
     previous = walkprevious(heap, block)
     next = walknext(heap, block)
 
-    if !isnothing(previous) && isfree(previous)
+    if previous !== nothing && isfree(previous)
         remove!(heap, previous)
         previous.size += block.size
         block = previous
     end
 
-    if !isnothing(next)
+    if next !== nothing
         if isfree(next)
             remove!(heap, next)
             block.size += next.size
 
             # Set the backedge for the nextnext block
             nextnext = walknext(heap, next)
-            if !isnothing(nextnext)
+            if nextnext !== nothing
                 nextnext.backsize = block.size
             end
         else
@@ -219,12 +219,14 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     needed_size > sizeof(heap) && return nothing
     bin = getbin(heap, needed_size)
     block = pop!(heap, bin)
-    isnothing(block) && return nothing
+    block === nothing && return nothing
 
+    # Setup the default state for the block
     block.free = false
     block.evicting = false
     block.id = id
     block.pool = heap.pool
+    set_references!(block, one(UInt64))
 
     ptr = pointer(block) + headersize()
     return ptr
@@ -280,7 +282,7 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
         evict!(cb, heap, current)
         current = walknext(heap, current)
         # If we've either freed enough memory or walked off the end of the array, exit.
-        (sizefreed >= sz || isnothing(current)) && break
+        (sizefreed >= sz || current === nothing) && break
     end
 
     # Walk backwards if we have to in order to free enough space.
@@ -375,7 +377,7 @@ function size_invariant(heap::CompactHeap)
     # This certainly better not be nothing!
     # Heaps should always have at least one entry
     y = iterate(heap)
-    if isnothing(y)
+    if y === nothing
         println("Empty Heap!!")
         passed = false
     end
@@ -384,7 +386,7 @@ function size_invariant(heap::CompactHeap)
     count = 1
     while true
         y = iterate(heap, state)
-        isnothing(y) && break
+        y === nothing && break
         next, state = y
 
         if next.backsize != block.size

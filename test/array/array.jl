@@ -23,7 +23,6 @@ function gctest(manager)
     offset = fieldoffset(typeof(A), fieldnumber)
     @test CachedArrays.datapointer(A) == pointer_from_objref(A) + offset
 
-    # Internal detail
     @test CachedArrays.pool(A) == DRAM
 
     # Make sure the global manager is updated correctly.
