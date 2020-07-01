@@ -69,29 +69,4 @@
     block.next = b
     @test block.next == b
     @test pointer(block.next) == x
-
-    #####
-    ##### Reference Counting
-    #####
-
-    CachedArrays.set_references!(block, 0)
-    @test CachedArrays.get_references(block) == 0
-
-    @test CachedArrays.add_reference!(block) == 1
-    @test CachedArrays.get_references(block) == 1
-
-    @test CachedArrays.add_reference!(block) == 2
-    @test CachedArrays.get_references(block) == 2
-
-    # Remove references
-    @test CachedArrays.remove_reference!(block) == 1
-    @test CachedArrays.get_references(block) == 1
-
-    @test CachedArrays.remove_reference!(block) == 0
-    @test CachedArrays.get_references(block) == 0
-
-    CachedArrays.set_references!(block, 10)
-    @test CachedArrays.get_references(block) == 10
-    CachedArrays.clear_references!(block)
-    @test CachedArrays.get_references(block) == 0
 end

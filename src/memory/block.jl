@@ -46,9 +46,6 @@ struct PoolType{T} end
 # bytes 31..24
 #    the size of the block before this block.
 #    used to walk backward through the heap/
-#
-# bytes 40..32
-#    reference count.
 
 struct Block <: AbstractMetadata
     ptr::Ptr{Nothing}
@@ -190,30 +187,6 @@ function getsibling(x::Block)
 end
 
 setsibling!(x::Block, y::Block) = (x.sibling = y)
-
-# reference counting
-# TODO: might actually have to be Atomic ...
-function add_reference!(x::Block)
-    addr = convert(Ptr{UInt64}, pointer(x) + 32)
-    val = unsafe_load(addr) + 1
-    unsafe_store!(addr, val)
-    return val
-end
-
-function remove_reference!(x::Block)
-    addr = convert(Ptr{UInt64}, pointer(x) + 32)
-    val = unsafe_load(addr) - 1
-    unsafe_store!(addr, val)
-    return val
-end
-
-get_references(x::Block) = unsafe_load(convert(Ptr{UInt64}, pointer(x) + 32))
-
-function set_references!(x::Block, val)
-    unsafe_store!(convert(Ptr{UInt64}, pointer(x) + 32), convert(UInt64, val))
-end
-
-clear_references!(x::Block) = set_references!(x, zero(UInt64))
 
 #####
 ##### Display

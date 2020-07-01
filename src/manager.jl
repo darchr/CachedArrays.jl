@@ -217,7 +217,7 @@ getobjects(::PoolType{DRAM}, M::CacheManager) = M.local_objects
 getobjects(::PoolType{PMM}, M::CacheManager) = M.remote_objects
 
 getaliases(::PoolType{DRAM}, M::CacheManager) = M.local_alias
-getaliases(::PoolType{PMM}, M::CacheManager) = M.remote_objects
+getaliases(::PoolType{PMM}, M::CacheManager) = M.remote_alias
 
 adjust_size!(::PoolType{DRAM}, M::CacheManager, x) = M.size_of_local += x
 adjust_size!(::PoolType{PMM}, M::CacheManager, x) = M.size_of_remote += x
@@ -255,6 +255,7 @@ end
 
 ## Register a single - no aliasing objects
 function register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr) where {T}
+
     # Correctness Checks
     @check block.pool == T
     id = getid(block)
@@ -409,19 +410,21 @@ function _cleanup(M::CacheManager)
         if pool == PMM
             @check getsibling(block) === nothing
 
-            # Deregister from PMM
-            unregister!(PoolType{PMM}(), M, block, ptr)
-            # Free this buffer
+            # Deregister from PMM. If there are zero remaining references,
+            # then we free the block
+            iszero(unregister!(PoolType{PMM}(), M, block, ptr)) || continue
             free(PoolType{PMM}(), M, block)
         elseif pool == DRAM
-            unregister!(PoolType{DRAM}(), M, block, ptr)
+            iszero(unregister!(PoolType{DRAM}(), M, block, ptr)) || continue
 
             # Does this block have a sibling?
             sibling = getsibling(block)
             if sibling !== nothing
                 @check getid(block) == getid(sibling)
                 @check getpool(sibling) == PMM
-                unregister!(PoolType{PMM}(), M, block, ptr)
+
+                # use `unsafe_unregister!` to completely remove this block.
+                unsafe_unregister!(PoolType{PMM}(), M, block)
                 free(PoolType{PMM}(), M, sibling)
             end
             free(PoolType{DRAM}(), M, block)
@@ -581,14 +584,16 @@ end
 moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
 
 function moveto!(
-        ::PoolType{DRAM},
+        dram::PoolType{DRAM},
         block::Block,
         M::CacheManager;
         dirty = true,
         write_before_read = false
     )
 
-    lock(M.lock) do
+    id = getid(block)
+
+    @lock M.lock begin
         # If the data is already local, mark a usage and return.
         if getpool(block) == DRAM
             # TODO: Fix
@@ -600,7 +605,7 @@ function moveto!(
         @check getsibling(block) === nothing
 
         # Otherwise, we need to allocate some local data for it.
-        storage_ptr = unsafe_alloc(PoolType{DRAM}(), M, length(block), getid(block))
+        storage_ptr = unsafe_alloc(PoolType{DRAM}(), M, length(block), id)
 
         # If we're assured that we're doing a write before a read, then we can avoid
         # copying over the the remote storage
@@ -615,12 +620,21 @@ function moveto!(
         setsibling!(newblock, block)
         setsibling!(block, newblock)
 
-        # TODO: Cleanup pointer replacement
-        ptr = M.remote_objects[getid(block)]
-        unsafe_store!(ptr, storage_ptr)
-
-        # Track this object
-        register!(PoolType{DRAM}(), M, newblock, ptr)
+        # Check if this block has multiple watchers.
+        # If so, update all references to this block.
+        pmm = PoolType{PMM}()
+        objects = getobjects(pmm, M)
+        ptr = get(objects, id, nothing)
+        if ptr === nothing
+            ptrs = getaliases(pmm, M)[id]
+            for _ptr in ptrs
+                unsafe_store!(_ptr, storage_ptr)
+            end
+            register_alias!(dram, M, newblock, ptrs)
+        else
+            unsafe_store!(ptr, storage_ptr)
+            register!(dram, M, newblock, ptr)
+        end
 
         # Set the dirty flag.
         # If `write_before_read` is true, then we MUST mark this block as dirty.
@@ -631,8 +645,9 @@ function moveto!(
     return nothing
 end
 
-function moveto!(::PoolType{PMM}, block::Block, M::CacheManager)
-    lock(M.lock) do
+function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
+    id = getid(block)
+    @lock M.lock begin
         # If already in PMM, do nothing
         getpool(block) == PMM && return nothing
         sibling = getsibling(block)
@@ -641,13 +656,13 @@ function moveto!(::PoolType{PMM}, block::Block, M::CacheManager)
         # Otherwise, we have to write back.
         createstorage = (sibling === nothing)
         if createstorage
-            storage_ptr = unsafe_alloc(PoolType{PMM}(), M, length(block), getid(block))
+            storage_ptr = unsafe_alloc(PoolType{PMM}(), M, length(block), id)
             sibling = unsafe_block(storage_ptr)
         else
             storage_ptr = datapointer(sibling)
         end
 
-        @check getid(sibling) == getid(block)
+        @check getid(sibling) == id
 
         if isdirty(block) || createstorage
             # Since `storage_ptr` is just a pointer, we have to manually inform the copy engine
@@ -655,23 +670,28 @@ function moveto!(::PoolType{PMM}, block::Block, M::CacheManager)
             nthreads = min(Threads.nthreads(), 4)
             _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
         end
-        #memcheck(block, unsafe_block(storage_ptr))
+
+        # Update back edges
+        dram = PoolType{DRAM}()
+        objects = getobjects(dram, M)
+        ptr = get(objects, id, nothing)
+        if ptr === nothing
+            ptrs = getaliases(dram, M)[id]
+            for _ptr in ptrs
+                unsafe_store!(_ptr, storage_ptr)
+            end
+            createstorage && register_alias!(pool, M, sibling, ptrs)
+        else
+            unsafe_store!(ptr, storage_ptr)
+            createstorage && register!(pool, M, sibling, ptr)
+        end
 
         # Deregister this object from local tracking.
-        # First, get the pointer to the data we are replacing.
-        ptr = M.local_objects[getid(block)]
         unsafe_unregister!(PoolType{DRAM}(), M, block)
-
-        # Now - swap data at this pointer.
-        unsafe_store!(ptr, storage_ptr)
 
         # Free the block we just removed.
         free(PoolType{DRAM}(), M, block)
         setsibling!(sibling, Block())
-
-        # If we created storage for this array, we need to register the array in the remote
-        # storage tracking.
-        createstorage && register!(PoolType{PMM}(), M, sibling, ptr)
     end
     return nothing
 end

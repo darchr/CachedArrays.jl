@@ -226,7 +226,6 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     block.evicting = false
     block.id = id
     block.pool = heap.pool
-    set_references!(block, one(UInt64))
 
     ptr = pointer(block) + headersize()
     return ptr
