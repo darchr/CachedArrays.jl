@@ -100,7 +100,7 @@ end
 # TODO: Figure out maximum number of threads for copying from PMM to PMM
 function memcpy!(dest::AbstractCachedArray{T}, src::AbstractArray{T}; nthreads = nothing) where {T}
     # Perform standard thread chosing logic
-    if isnothing(nthreads)
+    if nthreads === nothing
         maxthreads = Threads.nthreads()
         nthreads = pool(dest) == PMM ? min(maxthreads, 4) : maxthreads
     end
@@ -133,7 +133,7 @@ function _memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}; nthreads = noth
         dest_ptr,
         src_ptr,
         length(dest);
-        nthreads = isnothing(nthreads) ? Threads.nthreads() : nthreads
+        nthreads = nthreads === nothing ? Threads.nthreads() : nthreads
     )
 end
 
@@ -153,7 +153,7 @@ end
 
 function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)
     # Handle `isnothing` case first.
-    if isnothing(nthreads)
+    if nthreads === nothing
         unsafe_memcpy!(+, dest, src, bytes)
         sfence()
         return nothing

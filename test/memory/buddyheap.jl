@@ -16,7 +16,7 @@
 
     # Make sure that this block does not have a buddy
     block = first(heap)
-    @test isnothing(CachedArrays.getbuddy(heap, block))
+    @test CachedArrays.getbuddy(heap, block) === nothing
 
     # Now, split this bin
     a, b = CachedArrays.split!(heap, pop!(heap.freelists[num_bins]))

@@ -138,7 +138,7 @@ function gc_managers()
 
     # Now, find all the managers that have been completely cleaned up.
     i = findall(cangc, GlobalManagers)
-    isnothing(i) && return 0
+    i === nothing && return 0
 
     # Remove the managers from this list and then run a full garbage collection to make sure
     # they're well can completely gone.

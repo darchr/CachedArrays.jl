@@ -94,7 +94,7 @@ function BuddyHeap(
     ptr = base
 
     # Decide where to start based on the max-allocation size
-    currentsize = isnothing(maxallocation) ? binsize(maxbin) : binsize(getbin(maxallocation))
+    currentsize = maxallocation === nothing ? binsize(maxbin) : binsize(getbin(maxallocation))
 
     while currentsize >= MIN_ALLOCATION
         # Check if we can allocate a chunk of this size.
@@ -171,7 +171,7 @@ function pop_freelist!(heap::BuddyHeap, bin)
         # Find the first non-null block
         range = bin+1:numbins(heap)
         i = findfirst(x -> !isempty(heap.freelists[x]), range)
-        isnothing(i) && return nothing
+        i === nothing && return nothing
         index = range[i]
 
         block = pop_freelist!(heap, index)
@@ -193,7 +193,7 @@ function putback!(heap::BuddyHeap, block::Block)
     # Check if the buddy for this block is free.
     # If so, coaslesce the two of them together.
     buddy = getbuddy(heap, block)
-    while !isnothing(buddy) && isfree(buddy) && (buddy.size == block.size)
+    while buddy !== nothing && isfree(buddy) && (buddy.size == block.size)
         # Coalesce the two of them together.
         remove!(heap, buddy)
 
@@ -219,7 +219,7 @@ function alloc(heap::BuddyHeap, bytes::Integer, id::UInt)
     # Make sure we include the sikkkkze of the header in this computation.
     bin = getbin(max(bytes + headersize(), MIN_ALLOCATION))
     block = pop_freelist!(heap, bin)
-    if isnothing(block)
+    if block === nothing
         return nothing
     else
         # Mark this block as used
@@ -362,7 +362,7 @@ function buddycheck(heap::BuddyHeap)
     for block in heap
         if isfree(block)
             buddy = getbuddy(heap, block)
-            if !isnothing(buddy) && (buddy.size == block.size) && isfree(buddy)
+            if buddy !== nothing && (buddy.size == block.size) && isfree(buddy)
                 return false
             end
         end
