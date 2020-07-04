@@ -15,7 +15,6 @@ isnull(x::UInt) = iszero(x)
 abstract type AbstractHeap end
 
 # Heap implementations
-include("buddyheap.jl")
 include("compactheap.jl")
 
 # API

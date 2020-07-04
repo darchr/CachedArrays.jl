@@ -271,8 +271,6 @@ function evictfrom!(heap::CompactHeap, ptr::Ptr{Nothing}, sz; kw...)
 end
 
 function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
-    bsz = binsize(getbin(heap, sz + headersize()))
-
     sizefreed = 0
     current = block
     # Walk forward until either we have freed enough space or reach the end of the heap.
