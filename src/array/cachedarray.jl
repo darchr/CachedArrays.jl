@@ -91,7 +91,9 @@ end
 Base.unsafe_convert(::Type{Ptr{T}}, A::AbstractCachedArray{T}) where {T} = pointer(A)
 Base.sizeof(A::AbstractCachedArray) = prod(size(A)) * sizeof(eltype(A))
 @inline Base.size(A::AbstractCachedArray) = A.dims
+
 Base.elsize(::AbstractCachedArray{T}) where {T} = sizeof(T)
+Base.elsize(::Type{<:AbstractCachedArray{T}}) where {T} = sizeof(T)
 
 function Base.getindex(A::AbstractCachedArray, i::Int)
     @boundscheck checkbounds(A, i)
