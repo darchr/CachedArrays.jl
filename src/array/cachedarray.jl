@@ -97,12 +97,12 @@ Base.elsize(::Type{<:AbstractCachedArray{T}}) where {T} = sizeof(T)
 
 function Base.getindex(A::AbstractCachedArray, i::Int)
     @boundscheck checkbounds(A, i)
-    return VectorizationBase.vload(pointer(A), sizeof(eltype(A)) * (i - 1))
+    return Base.unsafe_load(pointer(A), i)
 end
 
 function Base.setindex!(A::AbstractCachedArray, v, i::Int)
     @boundscheck checkbounds(A, i)
-    return VectorizationBase.vstore!(pointer(A), v, sizeof(eltype(A)) * (i - 1))
+    return Base.unsafe_store!(pointer(A), v, i)
 end
 
 Base.IndexStyle(::Type{<:AbstractCachedArray}) = Base.IndexLinear()

@@ -20,8 +20,6 @@ import TimerOutputs
 # Default to `true` for now because of development
 const DEBUG = true
 
-
-
 # Check ALL array updates for correctness.
 const PEDANTIC = false      # TODO: Currently Broken
 
@@ -30,8 +28,7 @@ const PEDANTIC = false      # TODO: Currently Broken
 _boolparse(x::Bool) = x
 _boolparse(x::String) = parse(Bool, x)
 
-#const IS_2LM = false
-const IS_2LM = true
+const IS_2LM = false
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
