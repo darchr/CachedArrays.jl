@@ -10,8 +10,8 @@
 #
 # Note that LockedCachedArrays don't need to worry about managing their state in the
 # CacheManager because that is handled by the underlying CachedArray.
-struct LockedCachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
-    array::CachedArray{T,N,C}
+struct LockedCachedArray{T,N} <: AbstractCachedArray{T,N}
+    array::CachedArray{T,N}
 end
 
 LockedCachedArray(A::Array, manager) = LockedCachedArray(CachedArray(A, manager))

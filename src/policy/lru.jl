@@ -14,7 +14,7 @@ mutable struct LRU{T}
     count::Int
 
     # Wrap around a mutable binary heap.
-    heap::DataStructures.MutableBinaryHeap{Priority{T}, DataStructures.LessThan}
+    heap::DataStructures.MutableBinaryHeap{Priority{T}, Base.ForwardOrdering}
     # Map items to their handles
     handles::Dict{T,Int}
 end

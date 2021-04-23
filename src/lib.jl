@@ -5,12 +5,12 @@ macro prefetch(expr)
     prefetch_impl(:($expr = nothing))
 end
 
-maybesuper(::AbstractCachedArray{T,N}) where {T,N} = DenseArray{T,N}
+maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
 maybesuper(::T) where {T} = T
 
 # Define prefetching to do nothing for non-cached arrays.
 maybeprefetch(x) = nothing
-maybeprefetch(x::AbstractCachedArray) = prefetch!(x)
+maybeprefetch(x::CachedArray) = prefetch!(x)
 _esc(x) = :($(esc(x)))
 
 # Process arguments - see if any want to be unlocked.
@@ -75,5 +75,7 @@ end
 #####
 
 # Prefetch before *
-@prefetch Base.:*(A::AbstractCachedArray, B::AbstractCachedArray)
+@prefetch Base.:*(A::CachedArray, B::CachedArray)
+
+# DiffEqBase.diffeqbc(x::CachedArray) = DiffEqBase.DiffEqBC(x)
 

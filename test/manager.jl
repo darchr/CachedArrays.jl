@@ -9,7 +9,7 @@
         @__DIR__;
         localsize = 2^20,
         remotesize = 2^22,
-        minallocation = minallocation
+        minallocation = minallocation,
     )
 
     @test length(manager.local_objects) == 0
@@ -20,7 +20,12 @@
     @test CachedArrays.inlocal(manager, A)
     @test CachedArrays.pool(A) == DRAM
     if CachedArrays.DEBUG
-        @test_throws AssertionError CachedArrays.register!(PoolType{DRAM}(), manager, A)
+        @test_throws AssertionError CachedArrays.register!(
+            PoolType{DRAM}(),
+            manager,
+            CachedArrays.metadata(A),
+            CachedArrays._datapointer(A),
+        )
     end
 
     B = CachedArray{UInt8}(undef, manager, (300000,))
@@ -43,7 +48,12 @@
     @test CachedArrays.pool(B) == DRAM
     @test CachedArrays.pool(C) == DRAM
     if CachedArrays.DEBUG
-        @test_throws AssertionError CachedArrays.register!(PoolType{PMM}(), manager, A)
+        @test_throws AssertionError CachedArrays.register!(
+            PoolType{PMM}(),
+            manager,
+            CachedArrays.metadata(A),
+            CachedArrays._datapointer(A),
+        )
     end
 
     # Prefetch A, should kick out both B.

@@ -11,15 +11,41 @@ const PMM_ALLOCATOR_TYPE = IS_2LM ? AlignedAllocator : MemKindAllocator
 
 _datapointer(x) = convert(Ptr{Ptr{Nothing}}, datapointer(x))
 
+mutable struct Region{T}
+    # TODO: Store the allocation function in the block header to avoid taking space in
+    # the region struct?
+    ptr::Ptr{Nothing}
+    manager::T
+
+    function Region(ptr::Ptr{Nothing}, manager::T) where {T}
+        @timeit "allocating" begin
+            region = new{T}(ptr, manager)
+
+            # Connect with the manager
+            register!(manager, _datapointer(region), ptr)
+            finalizer(cleanup, region)
+        end
+        return region
+    end
+end
+
+cleanup(region::Region) = cleanup(manager(region), pointer(region))
+metastyle(::Region) = BlockMeta()
+manager(region::Region) = region.manager
+
+function alloc(region::Region, bytes::Integer, id = getid(region.manager))
+    ptr = unsafe_alloc(manager(region), bytes, id)
+    return Region(ptr, manager(region))
+end
+
+Base.pointer(region::Region) = region.ptr
+datapointer(region::Region) = pointer_from_objref(region)
+
 # Maintains Cache management.
 mutable struct CacheManager{C}
     # Reference to local objects
-    #
-    # When multiple objects own the same chunk of memory, then we move the mapping from
-    # ID to pointer from the `local_objects` field to the `local_alias` field.
-    #
-    # This means we still have no allocations for single allocations, but still have
-    # the capacity to support multiple CachedArrays to own the same `Block`.
+    # NOTE: These need to be pointers and not `Region`s because we don't want the
+    # the manager to protect these objects from being garbage collected.
     local_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
     size_of_local::Int
 
@@ -36,7 +62,7 @@ mutable struct CacheManager{C}
     dram_heap::CompactHeap{AlignedAllocator}
     cleanlist::Vector{Block}
 
-    # Synchronize access ...
+    # Synchronize access
     lock::ReentrantLock
 
     ## local tunables
@@ -58,14 +84,14 @@ mutable struct CacheManager{C}
 end
 
 function CacheManager(
-        path::AbstractString;
-        localsize = 1_000_000_000,
-        remotesize = 1_000_000_000,
-        policy = LRU{Block}(),
-        flushpercent = Float32(1),
-        gc_before_evict = false,
-        minallocation = 22
-    ) where {T}
+    path::AbstractString;
+    localsize = 1_000_000_000,
+    remotesize = 1_000_000_000,
+    policy = LRU{Block}(),
+    flushpercent = Float32(1),
+    gc_before_evict = false,
+    minallocation = 10,
+)
 
     # Argument conversion
     flushpercent = Float32(flushpercent)
@@ -87,18 +113,14 @@ function CacheManager(
     size_of_remote = 0
 
     # Initialize Heaps
-    pmm_heap = CompactHeap(
-        pmm_allocator,
-        remotesize;
-        pool = PMM,
-        minallocation = minallocation
-    )
+    pmm_heap =
+        CompactHeap(pmm_allocator, remotesize; pool = PMM, minallocation = minallocation)
 
     dram_heap = CompactHeap(
         AlignedAllocator(),
         localsize;
         pool = DRAM,
-        minallocation = minallocation
+        minallocation = minallocation,
     )
 
     # Allow movement by default
@@ -127,7 +149,6 @@ function CacheManager(
 
     # Add this to the global manager list to ensure that it outlives any of its users
     push!(GlobalManagers, manager)
-
     return manager
 end
 
@@ -165,7 +186,8 @@ id(A) = getid(metadata(A))
 pool(A) = getpool(metadata(A))
 
 prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
-shallowfetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
+shallowfetch!(A; kw...) =
+    moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
 
 if IS_2LM
     # No eviction in 2LM
@@ -193,8 +215,14 @@ function Base.show(io::IO, M::CacheManager)
     println(io, "Cache Manager")
     println(io, "    $(length(M.local_objects)) Local Objects")
     println(io, "    $(length(M.remote_objects)) Remote Objects")
-    println(io, "    $(localsize(M) / 1E9) GB Local Memory Used of $(M.dram_heap.len / 1E9)")
-    println(io, "    $(remotesize(M) / 1E9) GB Remote Memory Used of $(M.pmm_heap.len / 1E9)")
+    println(
+        io,
+        "    $(localsize(M) / 1E9) GB Local Memory Used of $(M.dram_heap.len / 1E9)",
+    )
+    println(
+        io,
+        "    $(remotesize(M) / 1E9) GB Remote Memory Used of $(M.pmm_heap.len / 1E9)",
+    )
 end
 
 # TODO: Rename these
@@ -213,22 +241,23 @@ getobjects(::PoolType{PMM}, M::CacheManager) = M.remote_objects
 adjust_size!(::PoolType{DRAM}, M::CacheManager, x) = M.size_of_local += x
 adjust_size!(::PoolType{PMM}, M::CacheManager, x) = M.size_of_remote += x
 
-register!(A) = register!(manager(A), A)
-function register!(M::CacheManager, A)
-    lock(M.lock) do
+function register!(
+    manager::CacheManager,
+    datapointer::Ptr{Ptr{Nothing}},
+    allocated_pointer::Ptr{Nothing},
+)
+    block = unsafe_block(allocated_pointer)
+    lock(manager.lock) do
         # Register with the appropriate pool.
         # Statically dispatch to avoid a potential allocation.
-        p = pool(A)
+        p = block.pool
         if p == DRAM
-            register!(PoolType{DRAM}(), M, A)
+            register!(PoolType{DRAM}(), manager, block, datapointer)
         elseif p == PMM
-            register!(PoolType{PMM}(), M, A)
+            register!(PoolType{PMM}(), manager, block, datapointer)
         else
             error("Unknown Pool: $p")
         end
-
-        # Attach a finalizer to `A`.
-        finalizer(cleanup, A)
     end
     return nothing
 end
@@ -236,14 +265,13 @@ end
 update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, metadata(A))
 
 # Top level entry points
-register!(pool, M::CacheManager, A) = register!(pool, M, metadata(A), _datapointer(A))
 unregister!(pool, M::CacheManager, A) = unregister!(pool, M, metadata(A))
 
 ## Register a single - no aliasing objects
 function register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr) where {T}
     @check block.pool == T
     id = getid(block)
-    objects = getobjects(pool, M )
+    objects = getobjects(pool, M)
     @check !haskey(objects, id)
 
     # Add to data structures
@@ -284,7 +312,10 @@ end
 #
 # When we're trying to allocate (i.e., holding the lock) - THEN we'll call the `_cleanup`
 # method below which will put back all of the blocks on the `cleanlist`.
-cleanup(A, M = manager(A)) = push!(M.cleanlist, metadata(A))
+# TODO: Make atomic?
+function cleanup(manager::CacheManager, ptr)
+    Base.@lock_nofail manager.lock push!(manager.cleanlist, unsafe_block(ptr))
+end
 
 # Put back all items on the clean list.
 function _cleanup(M::CacheManager)
@@ -339,11 +370,12 @@ end
 ##### Allocate remote arrays
 #####
 
-# TODO: Deprecate?
-unsafe_alloc(::Type{T}, x...; kw...) where {T} = convert(Ptr{T}, unsafe_alloc(x...; kw...))
-
 # Try to allocate from DRAM first.
 # Then, try to allocate from PMM
+function alloc(manager::CacheManager, bytes::Int, id::UInt = getid(manager))
+    return Region(unsafe_alloc(manager, bytes, id), manager)
+end
+
 function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
     ptr = unsafe_alloc(PoolType{DRAM}(), manager, bytes, id)
     ptr === nothing || return ptr
@@ -354,11 +386,11 @@ end
 
 # Remote alloc without a finalizer
 function unsafe_alloc(
-        ::PoolType{PMM},
-        manager::CacheManager,
-        bytes,
-        id::UInt = getid(manager),
-    )
+    ::PoolType{PMM},
+    manager::CacheManager,
+    bytes,
+    id::UInt = getid(manager),
+)
 
     @timeit "PMM Alloc" begin
         isempty(manager.cleanlist) || _cleanup(manager)
@@ -394,11 +426,11 @@ end
 #         Do that free operation.
 
 function unsafe_alloc(
-        ::PoolType{DRAM},
-        manager::CacheManager,
-        bytes,
-        id::UInt = getid(manager),
-    )
+    ::PoolType{DRAM},
+    manager::CacheManager,
+    bytes,
+    id::UInt = getid(manager),
+)
 
     @timeit "DRAM Alloc" begin
         isempty(manager.cleanlist) || _cleanup(manager)
@@ -420,6 +452,7 @@ function unsafe_alloc(
             end
         end
     end
+
     return ptr
 end
 
@@ -428,8 +461,10 @@ free_convert(x::Ptr) = convert(Ptr{Nothing}, x)
 free_convert(x::Block) = _datapointer(x)
 
 free(pool::PoolType, manager::CacheManager, x) = free(pool, manager, free_convert(x))
-free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.dram_heap, ptr)
-free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing}) = free(manager.pmm_heap, ptr)
+free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) =
+    free(manager.dram_heap, ptr)
+free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing}) =
+    free(manager.pmm_heap, ptr)
 
 function doeviction!(manager, bytes)
     # The full storage storage types for policies may contain
@@ -485,12 +520,12 @@ end
 moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
 
 function moveto!(
-        dram::PoolType{DRAM},
-        block::Block,
-        M::CacheManager;
-        dirty = true,
-        write_before_read = false
-    )
+    dram::PoolType{DRAM},
+    block::Block,
+    M::CacheManager;
+    dirty = true,
+    write_before_read = false,
+)
 
     id = getid(block)
 

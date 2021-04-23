@@ -1,6 +1,6 @@
 module CachedArrays
 
-export CachedArray, LockedCachedArray, AbstractCachedArray
+export CachedArray
 
 # base
 import Base: @lock
@@ -10,6 +10,7 @@ import Dates
 import Random
 
 # Dependencies
+import ArrayInterface: ArrayInterface
 import VectorizationBase
 import DataStructures
 import SIMD
@@ -20,8 +21,6 @@ import TimerOutputs
 # Default to `true` for now because of development
 const DEBUG = true
 
-
-
 # Check ALL array updates for correctness.
 const PEDANTIC = false      # TODO: Currently Broken
 
@@ -31,7 +30,7 @@ _boolparse(x::Bool) = x
 _boolparse(x::String) = parse(Bool, x)
 
 #const IS_2LM = false
-const IS_2LM = true
+const IS_2LM = false
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
@@ -57,7 +56,7 @@ end
 ##### Optional Timing
 #####
 
-const ENABLETIMING = false
+const ENABLETIMING = true
 @static if ENABLETIMING
     const GLOBAL_TIMER = TimerOutputs.TimerOutput()
     macro timeit(label, expr)
@@ -111,8 +110,11 @@ include("policy/policy.jl")
 include("manager.jl")
 
 # Array Implementstions
+include("llvm.jl")
+using .LoadStore: LoadStore
+
 include("array/cachedarray.jl")
-include("array/locked.jl")
+# include("array/locked.jl")
 
 # Fast "memcpy"
 include("memcpy.jl")
@@ -147,6 +149,40 @@ function gc_managers()
 
     # Return the number of managers we removed
     return length(i)
+end
+
+#####
+##### Tracer
+#####
+
+import Cassette
+Cassette.@context TraceCtx
+
+mutable struct TraceMetadata
+    indent::Int
+    maxindent::Int
+end
+
+function Cassette.overdub(ctx::TraceCtx, f, args...)
+    meta = ctx.metadata
+    didindent = false
+    if meta.indent <= meta.maxindent
+        indent = "    "^meta.indent
+        println(indent, typeof(f), "(", join(typeof.(args), ", "), ")")
+        #println(indent, which(f, Tuple{typeof.(args)...}))
+        meta.indent += 1
+        didindent = true
+    end
+    result = Cassette.recurse(ctx, f, args...)
+    if didindent
+        meta.indent -= 1
+    end
+    return result
+end
+
+function trace(f, args...)
+    ctx = TraceCtx(; metadata = TraceMetadata(0, 10))
+    return Cassette.overdub(Cassette.disablehooks(ctx), f, args...)
 end
 
 end # module

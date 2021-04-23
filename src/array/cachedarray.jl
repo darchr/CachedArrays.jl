@@ -1,60 +1,48 @@
-abstract type AbstractCachedArray{T,N} <: DenseArray{T,N} end
-metastyle(::AbstractCachedArray) = BlockMeta()
+abstract type AbstractStatus end
+struct Locked <: AbstractStatus end
+struct ReadOnly <: AbstractStatus end
+struct ReadWrite <: AbstractStatus end
+
+const Readable = Union{ReadOnly, ReadWrite}
+const Writable = ReadWrite
 
 # Must make this mutable so we can attach a finalizer to it, unfortunately.
-mutable struct CachedArray{T,N,C <: CacheManager} <: AbstractCachedArray{T,N}
-    # This is the underlying data array.
-    # When this array is remote, we use `unsafe_wrap` to wrap our own pointer.
-    ptr::Ptr{T}
+struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
+    region::Region{M}
     dims::NTuple{N,Int}
-    manager::CacheManager
 
     # Inner constructor - do a type chack and make sure the finalizer is attached.
-    function CachedArray{T,N,C}(
-            ptr::Ptr{T},
-            dims::NTuple{N,Int},
-            manager::C,
-        ) where {T,N,C}
+    function CachedArray{T,N}(
+        region::Region{M},
+        dims::NTuple{N,Int},
+        status::S = ReadWrite(),
+    ) where {T,N,S,M}
 
         if !isbitstype(T)
             throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
         end
 
-        A = new{T,N,C}(ptr, dims, manager)
-        register!(A)
-        return A
+        return new{T,N,S,M}(region, dims)
     end
 end
 
 # Get a pointer to the `ptr` field of a CachedArray object.
-datapointer(A::CachedArray) = pointer_from_objref(A) + fieldoffset(typeof(A), 1)
+# ArrayInterface.size(A::CachedArray) = size(A)
+# ArrayInterface.strides(A) = (ArrayInterface.static(1), Base.tail(strides(A))...)
+# ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface.nstatic(Val(N))
+# ArrayInterface.contiguous_axis(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface.One()
+# ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface.Zero()
 
-# Simplify Stacktraces
-#function Base.show(io::IO, x::Type{<:AbstractCachedArray{T,N}}) where {T,N}
-#    print(io, "CachedArrays.CachedArray{$T,$N}")
-#end
+metastyle(::CachedArray) = BlockMeta()
+datapointer(A::CachedArray) = datapointer(A.region)
+manager(A::CachedArray) = manager(A.region)
 
-#####
-##### `Cacheable` Interface
-#####
-
-Base.pointer(A::AbstractCachedArray) = A.ptr
-
-# We need to put a return type annotation because otherwise, Julia doesn't like
-# inferring this.
-function manager(x::CachedArray{T,N,C})::C where {T,N,C}
-    return x.manager
-end
-
-function replace!(C::CachedArray{T}, ptr::Ptr{T}) where {T}
-    # TODO: In `pendantic` mode, unsafe wrap both `ptrs` to check equality.
-    C.ptr = ptr
-    return nothing
-end
+#@inline Base.pointer(A::CachedArray) = A.ptr
+@inline Base.pointer(A::CachedArray{T}) where {T} = Ptr{T}(pointer(A.region))
 
 # utils
 strip_params(::Type{<:CachedArray}) = CachedArray
-strip_params(::T) where {T <: AbstractCachedArray} = strip_params(T)
+strip_params(::T) where {T<:CachedArray} = strip_params(T)
 
 #####
 ##### Constructors
@@ -62,25 +50,20 @@ strip_params(::T) where {T <: AbstractCachedArray} = strip_params(T)
 
 CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
 
-function CachedArray{T,N}(x::Array{T,N}, manager::C) where {T,N,C}
-    ptr = lock(manager.lock) do
-        unsafe_alloc(T, manager, sizeof(x))
-    end
-
-    unsafe_copyto!(ptr, pointer(x), length(x))
-    return CachedArray{T,N,C}(ptr, size(x), manager)
+function CachedArray{T,N}(x::Array{T,N}, manager) where {T,N}
+    region = alloc(manager, sizeof(x))
+    unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
+    return CachedArray{T,N}(region, size(x))
 end
 
 function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
     return CachedArray{T}(undef, manager, (convert(Int, i),))
 end
 
-function CachedArray{T}(::UndefInitializer, manager::C, dims::NTuple{N,Int}) where {T,N,C}
+function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}) where {T,N}
     isbitstype(T) || error("Can only create CachedArrays of `isbitstypes`!")
-    ptr = lock(manager.lock) do
-        unsafe_alloc(T, manager, prod(dims) * sizeof(T))
-    end
-    A = CachedArray{T,N,C}(ptr, dims, manager)
+    region = alloc(manager, prod(dims) * sizeof(T))
+    A = CachedArray{T,N}(region, dims)
     return A
 end
 
@@ -88,61 +71,63 @@ end
 ##### Array Interface
 #####
 
-Base.unsafe_convert(::Type{Ptr{T}}, A::AbstractCachedArray{T}) where {T} = pointer(A)
-Base.sizeof(A::AbstractCachedArray) = prod(size(A)) * sizeof(eltype(A))
-@inline Base.size(A::AbstractCachedArray) = A.dims
+Base.unsafe_convert(::Type{Ptr{T}}, A::CachedArray{T}) where {T} = pointer(A)
+Base.sizeof(A::CachedArray) = prod(size(A)) * sizeof(eltype(A))
+@inline Base.size(A::CachedArray) = A.dims
 
-Base.elsize(::AbstractCachedArray{T}) where {T} = sizeof(T)
-Base.elsize(::Type{<:AbstractCachedArray{T}}) where {T} = sizeof(T)
+Base.elsize(::CachedArray{T}) where {T} = sizeof(T)
+Base.elsize(::Type{<:CachedArray{T}}) where {T} = sizeof(T)
 
-function Base.getindex(A::AbstractCachedArray, i::Int)
+function Base.getindex(A::CachedArray{<:Any,<:Any,S}, i::Int) where {S <: Readable}
     @boundscheck checkbounds(A, i)
-    return VectorizationBase.vload(pointer(A), sizeof(eltype(A)) * (i - 1))
+    return LoadStore.unsafe_custom_load(pointer(A), i)
+    #return VectorizationBase.vload(VectorizationBase.stridedpointer(A), (i,))
+    #return unsafe_load(pointer(A, i))
 end
 
-function Base.setindex!(A::AbstractCachedArray, v, i::Int)
+function Base.setindex!(A::CachedArray{<:Any,<:Any,S}, v, i::Int) where {S <: Writable}
     @boundscheck checkbounds(A, i)
-    return VectorizationBase.vstore!(pointer(A), v, sizeof(eltype(A)) * (i - 1))
+    return LoadStore.unsafe_custom_store!(pointer(A), v, i)
+    # return VectorizationBase.vstore!(VectorizationBase.stridedpointer(A), v, (i,))
+    #return unsafe_store!(pointer(A, i), v)
 end
 
-Base.IndexStyle(::Type{<:AbstractCachedArray}) = Base.IndexLinear()
+Base.IndexStyle(::Type{<:CachedArray}) = Base.IndexLinear()
 
 function Base.similar(
-        A::AbstractCachedArray,
-        eltyp::Type{T} = eltype(A),
-        dims::Tuple{Vararg{Int,N}} = size(A)
-   ) where {T,N}
-
+    A::CachedArray,
+    eltyp::Type{T} = eltype(A),
+    dims::Tuple{Vararg{Int,N}} = size(A),
+) where {T,N}
     strip_params(A){eltyp}(undef, manager(A), dims)
 end
 
-function Base.iterate(A::AbstractCachedArray, i::Int = 1)
+function Base.iterate(A::CachedArray{<:Any,<:Any,S}, i::Int = 1) where {S <: Readable}
     i > length(A) && return nothing
-    return (@inbounds A[i], i+1)
+    return (@inbounds A[i], i + 1)
 end
 
 # For alias detection
-Base.dataids(A::AbstractCachedArray) = (UInt(pointer(A)),)
+Base.dataids(A::CachedArray) = (UInt(pointer(A)),)
 
 #####
 ##### Broadcasting
 #####
 
 # Hijack broadcasting so we prioritize CachedArrays.
-function Base.BroadcastStyle(::Type{T}) where {T <: AbstractCachedArray}
-    return Broadcast.ArrayStyle{strip_params(T)}()
+function Base.BroadcastStyle(::Type{T}) where {T<:CachedArray}
+    return Broadcast.ArrayStyle{CachedArray}()
 end
 
 # TODO - right now, we traverse through the BC object to find the first intance of an
-# AbstractCachedArray.
+# CachedArray.
 #
 # A more general solution would gather all such arrays and check that all the CachedArrays
 # are the same.
 function Base.similar(
-        bc::Broadcast.Broadcasted{Broadcast.ArrayStyle{T}},
-        ::Type{ElType}
-    ) where {T <: AbstractCachedArray, ElType}
-
+    bc::Broadcast.Broadcasted{Broadcast.ArrayStyle{T}},
+    ::Type{ElType},
+) where {T<:CachedArray,ElType}
     cached = findT(T, bc)
     return similar(cached, ElType, axes(bc))
 end
@@ -151,12 +136,12 @@ end
 # Once we find it, return it.
 findT(::Type{T}, bc::Base.Broadcast.Broadcasted) where {T} = findT(T, bc.args)
 findT(::Type{T}, x::Tuple) where {T} = findT(T, findT(T, first(x)), Base.tail(x))
-findT(::Type{T}, x::U) where {T, U <: T} = x
+findT(::Type{T}, x::U) where {T,U<:T} = x
 findT(::Type{T}, x) where {T} = nothing
 findT(::Type{T}, ::Tuple{}) where {T} = nothing
-findT(::Type{T}, x::U, rest) where {T, U <: T} = x
+findT(::Type{T}, x::U, rest) where {T,U<:T} = x
 findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
 
 # We hit this case when there's Float32/Float64 confusion ...
-findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T, U <: T} = x.x
+findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T,U<:T} = x.x
 

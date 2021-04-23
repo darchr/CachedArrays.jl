@@ -27,7 +27,7 @@ function load_impl(::Type{T}, U::Integer) where {T <: SIMD.Vec}
         x = Symbol("i_$j")
         # Vector Load
         # Val(true) implies aligned load
-        :($x = SIMD.vload($T, _src + $(sizeof(T)) * $j, Val(true)))
+        :($x = SIMD.vload($T, _src + $(sizeof(T)) * $j, nothing, Val(true)))
     end
 end
 
@@ -39,7 +39,7 @@ function store_impl(::Type{T}, U::Integer) where {T <: SIMD.Vec}
         # second Val(true) implies nontemporal store
         #
         # See SIMD.jl for documentation.
-        :(SIMD.vstore($x, _dest + $(sizeof(T)) * $j, Val(true), Val(true)))
+        :(SIMD.vstore($x, _dest + $(sizeof(T)) * $j, nothing, Val(true), Val(true)))
     end
 end
 
@@ -98,7 +98,7 @@ end
 
 # Specialize `memcpy` for CachedArrays.
 # TODO: Figure out maximum number of threads for copying from PMM to PMM
-function memcpy!(dest::AbstractCachedArray{T}, src::AbstractArray{T}; nthreads = nothing) where {T}
+function memcpy!(dest::CachedArray{T}, src::AbstractArray{T}; nthreads = nothing) where {T}
     # Perform standard thread chosing logic
     if nthreads === nothing
         maxthreads = Threads.nthreads()
