@@ -92,15 +92,14 @@ end
 end
 
 # Setting and clearing entries.
-function setentry!(M::FindNextTree, index::Integer)
-    # Bound check
+Base.@propagate_inbounds function setentry!(M::FindNextTree, index::Integer)
     @boundscheck begin
         index > M.length && throw(BoundsError(M, index))
     end
 
     level = length(M.runs)
     while true
-        run = M.runs[level]
+        run = @inbounds M.runs[level]
 
         newindex, modindex = divrem64(index)
         @inbounds update = !hasentry(run[newindex])
@@ -114,8 +113,7 @@ function setentry!(M::FindNextTree, index::Integer)
     return nothing
 end
 
-function clearentry!(M::FindNextTree, index::Integer)
-    # Bound check
+Base.@propagate_inbounds function clearentry!(M::FindNextTree, index::Integer)
     @boundscheck begin
         index > M.length && throw(BoundsError(M, index))
     end
@@ -135,7 +133,7 @@ function clearentry!(M::FindNextTree, index::Integer)
     return nothing
 end
 
-function Base.findnext(M::FindNextTree, index::Integer)
+Base.@propagate_inbounds function Base.findnext(M::FindNextTree, index::Integer)
     index > 64 * length(M.runs[end]) && return nothing
     level = length(M.runs)
 

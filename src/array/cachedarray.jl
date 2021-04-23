@@ -81,15 +81,11 @@ Base.elsize(::Type{<:CachedArray{T}}) where {T} = sizeof(T)
 function Base.getindex(A::CachedArray{<:Any,<:Any,S}, i::Int) where {S <: Readable}
     @boundscheck checkbounds(A, i)
     return LoadStore.unsafe_custom_load(pointer(A), i)
-    #return VectorizationBase.vload(VectorizationBase.stridedpointer(A), (i,))
-    #return unsafe_load(pointer(A, i))
 end
 
 function Base.setindex!(A::CachedArray{<:Any,<:Any,S}, v, i::Int) where {S <: Writable}
     @boundscheck checkbounds(A, i)
     return LoadStore.unsafe_custom_store!(pointer(A), v, i)
-    # return VectorizationBase.vstore!(VectorizationBase.stridedpointer(A), v, (i,))
-    #return unsafe_store!(pointer(A, i), v)
 end
 
 Base.IndexStyle(::Type{<:CachedArray}) = Base.IndexLinear()
