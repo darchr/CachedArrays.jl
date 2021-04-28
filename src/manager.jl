@@ -34,7 +34,9 @@ metastyle(::Region) = BlockMeta()
 manager(region::Region) = region.manager
 
 function alloc(region::Region, bytes::Integer, id = getid(region.manager))
-    ptr = unsafe_alloc(manager(region), bytes, id)
+    ptr = lock(manager(region).lock) do
+        return unsafe_alloc(manager(region), bytes, id)
+    end
     return Region(ptr, manager(region))
 end
 
@@ -199,9 +201,12 @@ end
 manager(x) = error("Implement `manager` for $(typeof(x))")
 
 function getid(manager::CacheManager)
-    id = manager.idcount
-    manager.idcount += 1
-    return id
+    # TODO: Replace with atomic add ...
+    return lock(manager.lock) do
+        id = manager.idcount
+        manager.idcount += 1
+        return id
+    end
 end
 
 # Have all objects tracking the manager been cleaned up?
@@ -314,7 +319,7 @@ end
 # method below which will put back all of the blocks on the `cleanlist`.
 # TODO: Make atomic?
 function cleanup(manager::CacheManager, ptr)
-    Base.@lock_nofail manager.lock push!(manager.cleanlist, unsafe_block(ptr))
+    push!(manager.cleanlist, unsafe_block(ptr))
 end
 
 # Put back all items on the clean list.
@@ -373,7 +378,10 @@ end
 # Try to allocate from DRAM first.
 # Then, try to allocate from PMM
 function alloc(manager::CacheManager, bytes::Int, id::UInt = getid(manager))
-    return Region(unsafe_alloc(manager, bytes, id), manager)
+    ptr = lock(manager.lock) do
+        return unsafe_alloc(manager, bytes, id)
+    end
+    return Region(ptr, manager)
 end
 
 function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))

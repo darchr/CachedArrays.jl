@@ -19,8 +19,8 @@ module LoadStore
 using LLVM
 using LLVM.Interop
 
+# Type-based Alias Analysis for pointer accesses.
 function arraybuf_tbaa(ctx)
-
     # Get the array_buf tbaa node.
     # Look in `codegen.cpp` for the name of this node.
     tbaa_root = MDNode([MDString("jtbaa", ctx)], ctx)

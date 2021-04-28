@@ -55,7 +55,7 @@ end
 ##### Optional Timing
 #####
 
-const ENABLETIMING = true
+const ENABLETIMING = false
 @static if ENABLETIMING
     const GLOBAL_TIMER = TimerOutputs.TimerOutput()
     macro timeit(label, expr)
@@ -112,8 +112,7 @@ include("manager.jl")
 include("llvm.jl")
 using .LoadStore: LoadStore
 
-include("array/cachedarray.jl")
-# include("array/locked.jl")
+include("array.jl")
 
 # Fast "memcpy"
 include("memcpy.jl")
@@ -158,30 +157,35 @@ import Cassette
 Cassette.@context TraceCtx
 
 mutable struct TraceMetadata
-    indent::Int
-    maxindent::Int
+    fns::DataStructures.OrderedSet{String}
 end
 
-function Cassette.overdub(ctx::TraceCtx, f, args...)
-    meta = ctx.metadata
-    didindent = false
-    if meta.indent <= meta.maxindent
-        indent = "    "^meta.indent
-        println(indent, typeof(f), "(", join(typeof.(args), ", "), ")")
-        #println(indent, which(f, Tuple{typeof.(args)...}))
-        meta.indent += 1
-        didindent = true
+# function Cassette.overdub(ctx::TraceCtx, f, args...)
+#     meta = ctx.metadata
+#     push!(meta.fns, f)
+#     result = Cassette.recurse(ctx, f, args...)
+#     return result
+# end
+
+Cassette.overdub(ctx::TraceCtx, ::typeof(unsafe_alloc), x...) = unsafe_alloc(x...)
+Cassette.overdub(ctx::TraceCtx, ::typeof(register!), x...) = register!(x...)
+Cassette.overdub(ctx::TraceCtx, ::typeof(cleanup), x...) = cleanup(x...)
+
+function Cassette.prehook(ctx::TraceCtx, f::F, args::Vararg{Any,N}) where {F<:Function,N}
+    try
+        push!(ctx.metadata.fns, string(which(f, Tuple{_typeof.(args)...})))
+    catch err
     end
-    result = Cassette.recurse(ctx, f, args...)
-    if didindent
-        meta.indent -= 1
-    end
-    return result
+    return nothing
 end
+
+_typeof(x) = typeof(x)
+_typeof(::Type{T}) where {T} = T
 
 function trace(f, args...)
-    ctx = TraceCtx(; metadata = TraceMetadata(0, 10))
-    return Cassette.overdub(Cassette.disablehooks(ctx), f, args...)
+    ctx = TraceCtx(; metadata = TraceMetadata(DataStructures.OrderedSet{String}()))
+    Cassette.overdub(ctx, f, args...)
+    return ctx.metadata.fns
 end
 
 end # module

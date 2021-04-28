@@ -28,12 +28,12 @@ mutable struct CompactHeap{T} <: AbstractHeap
 end
 
 function CompactHeap(
-        allocator::T,
-        sz;
-        pool = DRAM,
-        # Power of two
-        minallocation = PowerOfTwo(21),
-    ) where {T}
+    allocator::T,
+    sz;
+    pool = DRAM,
+    # Power of two
+    minallocation = PowerOfTwo(21),
+) where {T}
 
     minallocation = poweroftwo(minallocation)
 
@@ -44,17 +44,9 @@ function CompactHeap(
     base = allocate(allocator, sz)
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
-    freelists = [Freelist{Block}() for _ in 1:numbins]
+    freelists = [Freelist{Block}() for _ = 1:numbins]
 
-    heap = CompactHeap{T}(
-        allocator,
-        minallocation,
-        base,
-        sz,
-        pool,
-        status,
-        freelists
-    )
+    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists)
 
     finalizer(heap) do x
         free(x.allocator, x.base)
@@ -107,15 +99,19 @@ end
 
 function Base.push!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
-    list = heap.freelists[bin]
+    list = @inbounds(heap.freelists[bin])
 
-    isempty(list) && setentry!(heap.status, bin)
+    isempty(list) && @inbounds(setentry!(heap.status, bin))
     push!(list, block)
     return nothing
 end
 
 popfreelist!(heap::CompactHeap, bin::Integer) = popfreelist!(heap, heap.freelists[bin], bin)
-function popfreelist!(heap::CompactHeap, list::Freelist, bin::Integer)
+Base.@propagate_inbounds function popfreelist!(
+    heap::CompactHeap,
+    list::Freelist,
+    bin::Integer,
+)
     block = pop!(list)
     isempty(list) && clearentry!(heap.status, bin)
     return block
@@ -126,22 +122,24 @@ end
 #
 # Assume `sz` is a multiple of the heap granularity
 function Base.pop!(heap::CompactHeap, bin)
-    list = heap.freelists[bin]
+    list = @inbounds heap.freelists[bin]
     if !isempty(list)
-        return popfreelist!(heap, list, bin)
+        return @inbounds(popfreelist!(heap, list, bin))
     end
 
     # Okay, we don't have a block.
     # We need to get the next highest available block and split it.
-    nextbin = findnext(heap.status, bin)
+    nextbin = @inbounds(findnext(heap.status, bin))
 
     # No bigger block available.
     # This means we can't fulfill this request.
     # Return `nothing` to indicate this.
     nextbin === nothing && return nothing
 
-    # Otherwise, pop of this
-    block = popfreelist!(heap, nextbin)
+    # Otherwise, take this block and split it.
+    # TODO: Maybe set a limit where we don't split if the over-allocation amount is
+    # less than this limit.
+    block = @inbounds(popfreelist!(heap, nextbin))
 
     # Now that we have the block, split it down to the size we want and put the remainder
     # back in the heap.
@@ -168,9 +166,9 @@ end
 
 function remove!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
-    list = heap.freelists[bin]
+    list = @inbounds(heap.freelists[bin])
     remove!(list, block)
-    isempty(list) && clearentry!(heap.status, bin)
+    isempty(list) && @inbounds(clearentry!(heap.status, bin))
     return nothing
 end
 
@@ -312,7 +310,7 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Threads.@threads for i in 1:4096:sizeof(heap)
+    Threads.@threads for i = 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
     end
     return nothing
@@ -346,8 +344,8 @@ function freelist_status_invariant(heap::CompactHeap)
 
     # Walk the `status` tree and correlate the entries with the freelist dict.
     for (i, mask) in enumerate(last(heap.status.runs))
-        for j in 1:64
-            bin = 64*(i-1) + j
+        for j = 1:64
+            bin = 64 * (i - 1) + j
             bin > maxbin && return passed
 
             if hasentryat(mask, j)

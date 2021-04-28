@@ -5,11 +5,9 @@ version = "0.1.0"
 
 [deps]
 ArrayInterface = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Cassette = "7057c7e9-c182-5462-911a-8362d720325c"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-DiffEqBase = "2b5f629d-d688-5b77-993f-72d75c75574e"
 LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 LibGit2 = "76f85450-5226-5b5a-8eaa-529ad045b433"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
