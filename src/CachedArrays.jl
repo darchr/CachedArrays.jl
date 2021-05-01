@@ -95,6 +95,9 @@ end
 
 # Bootstrap Utilities
 include("utils/findnexttree.jl")
+include("utils/threading.jl")
+include("utils/freebuffer.jl")
+
 include("memkind.jl")
 include("allocators.jl")
 include("metadata.jl")

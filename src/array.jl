@@ -66,11 +66,9 @@ function CachedArray{T,N}(x::Array{T,N}, manager) where {T,N}
     # finishing.
     #
     # TODO: Maybe extend the allocation API to handle this automatically ...
-    return Base.disable_sigint() do
-        region = alloc(manager, sizeof(x))
-        unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
-        return CachedArray{T,N}(region, size(x))
-    end
+    region = alloc(manager, sizeof(x))
+    unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
+    return CachedArray{T,N}(region, size(x))
 end
 
 function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
@@ -79,10 +77,8 @@ end
 
 function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}) where {T,N}
     isbitstype(T) || error("Can only create CachedArrays of `isbitstypes`!")
-    return Base.disable_sigint() do
-        region = alloc(manager, prod(dims) * sizeof(T))
-        return CachedArray{T,N}(region, dims)
-    end
+    region = alloc(manager, prod(dims) * sizeof(T))
+    return CachedArray{T,N}(region, dims)
 end
 
 #####

@@ -222,6 +222,7 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     # Setup the default state for the block
     block.free = false
     block.evicting = false
+    block.queued = false
     block.id = id
     block.pool = heap.pool
 

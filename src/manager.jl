@@ -34,9 +34,7 @@ metastyle(::Region) = BlockMeta()
 manager(region::Region) = region.manager
 
 function alloc(region::Region, bytes::Integer, id = getid(region.manager))
-    ptr = lock(manager(region).lock) do
-        return unsafe_alloc(manager(region), bytes, id)
-    end
+    ptr = @spinlock alloc_lock(manager(region)) unsafe_alloc(manager(region), bytes, id)
     return Region(ptr, manager(region))
 end
 
@@ -51,8 +49,8 @@ mutable struct CacheManager{C}
     local_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
     size_of_local::Int
 
-    # Create a new ID for each object registerd in the cache.
-    idcount::UInt
+    # Create a new ID for each object registered in the cache.
+    idcount::Threads.Atomic{UInt64}
 
     # All objects with remote memory.
     remote_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
@@ -62,10 +60,10 @@ mutable struct CacheManager{C}
     policy::C
     pmm_heap::CompactHeap{PMM_ALLOCATOR_TYPE}
     dram_heap::CompactHeap{AlignedAllocator}
-    cleanlist::Vector{Block}
 
     # Synchronize access
-    lock::ReentrantLock
+    alloc_lock::Base.Threads.SpinLock
+    freebuffer::FreeBuffer{Block}
 
     ## local tunables
 
@@ -84,6 +82,9 @@ mutable struct CacheManager{C}
     ## Prevent arrays from moving
     allow_movement::Bool
 end
+
+free_lock(manager::CacheManager) = manager.free_lock
+alloc_lock(manager::CacheManager) = manager.alloc_lock
 
 function CacheManager(
     path::AbstractString;
@@ -109,7 +110,6 @@ function CacheManager(
 
     local_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
     size_of_local = 0
-    idcount = one(UInt)
 
     remote_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
     size_of_remote = 0
@@ -132,14 +132,14 @@ function CacheManager(
     manager = CacheManager(
         local_objects,
         size_of_local,
-        idcount,
+        Threads.Atomic{UInt64}(1),
         remote_objects,
         size_of_remote,
         policy,
         pmm_heap,
         dram_heap,
-        Block[],
-        ReentrantLock(),
+        Threads.SpinLock(),
+        FreeBuffer{Block}(),
 
         # tunables,
         flushpercent,
@@ -167,6 +167,7 @@ function setdirty!(block::Block, M::CacheManager, flag)
     # this particular object lives in DRAM
     if getpool(block) == DRAM
         setdirty!(block, flag)
+        # TODO: Enforce synchronization.
         setdirty!(M.policy, block, flag)
     end
     return nothing
@@ -187,32 +188,42 @@ isdirty(A) = isdirty(metadata(A))
 id(A) = getid(metadata(A))
 pool(A) = getpool(metadata(A))
 
-prefetch!(A; kw...) = moveto!(PoolType{DRAM}(), A, manager(A); kw...)
-shallowfetch!(A; kw...) =
-    moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
+function prefetch!(A; kw...)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) begin
+        @spinlock remove_lock(_manager.freebuffer) begin
+            moveto!(PoolType{DRAM}(), A, _manager; kw...)
+        end
+    end
+end
 
-if IS_2LM
-    # No eviction in 2LM
-    evict!(A; kw...) = nothing
-else
-    evict!(A; kw...) = moveto!(PoolType{PMM}(), A, manager(A); kw...)
+function shallowfetch!(A; kw...)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) begin
+        @spinlock remove_lock(_manager.freebuffer) begin
+            moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
+        end
+    end
+end
+
+function evict!(A; kw...)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) begin
+        @spinlock remove_lock(_manager.freebuffer) begin
+            moveto!(PoolType{PMM}(), A, manager(A); kw...)
+        end
+    end
 end
 
 manager(x) = error("Implement `manager` for $(typeof(x))")
 
-function getid(manager::CacheManager)
-    # TODO: Replace with atomic add ...
-    return lock(manager.lock) do
-        id = manager.idcount
-        manager.idcount += 1
-        return id
-    end
-end
+# Note: `Threads.atomid_add!` returns the old value of the atomic.
+getid(manager::CacheManager) = Threads.atomic_add!(manager.idcount, one(UInt64))
 
 # Have all objects tracking the manager been cleaned up?
 function cangc(manager::CacheManager)
     # Empty out the cleanlist to deal with anything that's been GC'd
-    _cleanup(manager)
+    @spinlock alloc_lock(manager) cleanup(manager)
     return (localsize(manager) == 0) && (remotesize(manager) == 0)
 end
 
@@ -251,15 +262,15 @@ function register!(
     datapointer::Ptr{Ptr{Nothing}},
     allocated_pointer::Ptr{Nothing},
 )
-    block = unsafe_block(allocated_pointer)
-    lock(manager.lock) do
+    @spinlock alloc_lock(manager) begin
+        block = unsafe_block(allocated_pointer)
         # Register with the appropriate pool.
         # Statically dispatch to avoid a potential allocation.
         p = block.pool
         if p == DRAM
-            register!(PoolType{DRAM}(), manager, block, datapointer)
+            unsafe_register!(PoolType{DRAM}(), manager, block, datapointer)
         elseif p == PMM
-            register!(PoolType{PMM}(), manager, block, datapointer)
+            unsafe_register!(PoolType{PMM}(), manager, block, datapointer)
         else
             error("Unknown Pool: $p")
         end
@@ -267,15 +278,11 @@ function register!(
     return nothing
 end
 
-update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, metadata(A))
-
-# Top level entry points
-unregister!(pool, M::CacheManager, A) = unregister!(pool, M, metadata(A))
-
-## Register a single - no aliasing objects
-function register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr) where {T}
+function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr) where {T}
+    @requires alloc_lock(M)
     @check block.pool == T
     id = getid(block)
+    println("Registering block: $id")
     objects = getobjects(pool, M)
     @check !haskey(objects, id)
 
@@ -290,9 +297,18 @@ function register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr) where 
     return nothing
 end
 
-# This is called when moving - doesn't maintain reference counting.
-function unregister!(pool::PoolType{T}, M::CacheManager, block::Block) where {T}
+update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, metadata(A))
+
+# Top level entry points
+function unregister!(pool, M::CacheManager, A)
+    @spinlock alloc_lock(M) unsafe_unregister!(pool, M, metadata(A))
+    return nothing
+end
+
+function unsafe_unregister!(pool::PoolType{T}, M::CacheManager, block::Block) where {T}
+    @requires alloc_lock(M)
     id = getid(block)
+    println("Unregistering block: $id")
     objects = getobjects(pool, M)
 
     # Just remove backedges
@@ -317,70 +333,78 @@ end
 #
 # When we're trying to allocate (i.e., holding the lock) - THEN we'll call the `_cleanup`
 # method below which will put back all of the blocks on the `cleanlist`.
-# TODO: Make atomic?
-function cleanup(manager::CacheManager, ptr)
-    push!(manager.cleanlist, unsafe_block(ptr))
+
+# Note: `push!` for the `FreeBuffer` is thread safe, so no synchonizations needs
+# to happen at this level.
+cleanup(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
+
+function cleanup(manager)
+    @spinlock remove_lock(manager.freebuffer) begin
+        prepare_cleanup!(manager)
+        unsafe_cleanup!(manager)
+    end
 end
 
-# Put back all items on the clean list.
-function _cleanup(M::CacheManager)
-    # Free all blocks in the cleanlist
-    for block in M.cleanlist
-        # Blocks in the cleanlist can become free if the GC runs while eviction is happening.
-        # If that is the case, then the block should:
-        #
-        # 1. Be marked as free
-        # 2. Belong to DRAM
-        # 3. Have the `evicting` tag set.
-        #
-        # If these criteria are set, we don't have any further work we need to do to
-        # process this block.
-        if isfree(block)
-            @check getpool(block) == DRAM
-            #@check block.evicting
-            continue
-        end
+prepare_cleanup!(manager::CacheManager) = unsafe_swap!(manager.freebuffer)
 
-        # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
-        # be an error.
-        pool = getpool(block)
-        if pool == PMM
-            @check getsibling(block) === nothing
+# N.B. - `free_lock` must be held to call this.
+function unsafe_cleanup!(M::CacheManager)
+    @requires alloc_lock(M) remove_lock(M.freebuffer)
+    while true
+        cleanlist = unsafe_get(M.freebuffer)
+        println("Running cleanup on $(length(cleanlist)) blocks")
+        # Free all blocks in the cleanlist
+        for block in cleanlist
+            @check !isfree(block)
 
-            # Deregister from PMM. If there are zero remaining references,
-            # then we free the block
-            unregister!(PoolType{PMM}(), M, block)
-            free(PoolType{PMM}(), M, block)
-        elseif pool == DRAM
-            unregister!(PoolType{DRAM}(), M, block)
+            # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
+            # be an error.
+            pool = getpool(block)
+            if pool == PMM
+                @check getsibling(block) === nothing
 
-            # Does this block have a sibling?
-            sibling = getsibling(block)
-            if sibling !== nothing
-                @check getid(block) == getid(sibling)
-                @check getpool(sibling) == PMM
+                # Deregister from PMM. If there are zero remaining references,
+                # then we free the block
+                unsafe_unregister!(PoolType{PMM}(), M, block)
+                free(PoolType{PMM}(), M, block)
+            elseif pool == DRAM
+                unsafe_unregister!(PoolType{DRAM}(), M, block)
 
-                # use `unsafe_unregister!` to completely remove this block.
-                unregister!(PoolType{PMM}(), M, block)
-                free(PoolType{PMM}(), M, sibling)
+                # Does this block have a sibling?
+                sibling = getsibling(block)
+                if sibling !== nothing
+                    @check getid(block) == getid(sibling)
+                    @check getpool(sibling) == PMM
+
+                    # use `unsafe_unregister!` to completely remove this block.
+                    unsafe_unregister!(PoolType{PMM}(), M, block)
+                    free(PoolType{PMM}(), M, sibling)
+                end
+                free(PoolType{DRAM}(), M, block)
             end
-            free(PoolType{DRAM}(), M, block)
+        end
+        empty!(cleanlist)
+
+        # Process other buffer as well.
+        # Safe to do since we already hold the "remove_lock".
+        # The next trip around the loop will be with the new buffer.
+        if candrain(M.freebuffer)
+            unsafe_swap!(M.freebuffer)
+        else
+            break
         end
     end
-    empty!(M.cleanlist)
     return nothing
 end
 
 #####
-##### Allocate remote arrays
+##### `alloc` entry point
 #####
 
 # Try to allocate from DRAM first.
 # Then, try to allocate from PMM
 function alloc(manager::CacheManager, bytes::Int, id::UInt = getid(manager))
-    ptr = lock(manager.lock) do
-        return unsafe_alloc(manager, bytes, id)
-    end
+    ptr = @spinlock alloc_lock(manager) unsafe_alloc(manager, bytes, id)
     return Region(ptr, manager)
 end
 
@@ -391,39 +415,6 @@ function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
     # No free space. Try to allocate from PMM
     return unsafe_alloc(PoolType{PMM}(), manager, bytes, id)
 end
-
-# Remote alloc without a finalizer
-function unsafe_alloc(
-    ::PoolType{PMM},
-    manager::CacheManager,
-    bytes,
-    id::UInt = getid(manager),
-)
-
-    @timeit "PMM Alloc" begin
-        isempty(manager.cleanlist) || _cleanup(manager)
-        ptr = alloc(manager.pmm_heap, bytes, id)
-
-        # If we still don't have anything, run a full GC.
-        if ptr === nothing
-            @timeit "PMM Alloc GC" begin
-                GC.gc(true)
-                _cleanup(manager)
-                ptr = alloc(manager.pmm_heap, bytes, id)
-            end
-        end
-    end
-
-    if ptr === nothing
-        error("Cannot Allocate from PMM")
-    end
-
-    return ptr
-end
-
-#####
-##### Local Allocation.
-#####
 
 # Step 1: Try to just do a normal allocation.
 # Step 2: Run a quick GC and try to allocate again.
@@ -438,27 +429,65 @@ function unsafe_alloc(
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager),
-)
+    cleanup_function::F = cleanup,
+    eviction_function::G = doeviction!,
+) where {F,G}
+    @requires alloc_lock(manager)
 
     @timeit "DRAM Alloc" begin
-        isempty(manager.cleanlist) || _cleanup(manager)
-        ptr = alloc(manager.dram_heap, bytes, id)
+        heap = manager.dram_heap
+        candrain(manager.freebuffer) && cleanup_function(manager)
+        ptr = alloc(heap, bytes, id)
 
         # If allocation failed, try a GC
         if manager.gc_before_evict && ptr === nothing
+            printstyled("Trying full GC cleanup\n"; color = :red, bold = true)
             @timeit "DRAM Alloc GC" begin
+                # Trigger full GC, then incremental GC to try to get finalizers to run.
                 GC.gc(true)
-                _cleanup(manager)
-                ptr = alloc(manager.dram_heap, bytes, id)
+                # candrain(manager.freebuffer) || cleanup_function(manager)
+                ptr = alloc(heap, bytes, id)
             end
         end
 
         if ptr === nothing && manager.allow_movement
+            printstyled("Trying Eviction\n"; color = :red, bold = true)
             @timeit "DRAM Alloc Eviction" begin
-                doeviction!(manager, bytes)
+                eviction_function(manager, bytes)
                 ptr = alloc(manager.dram_heap, bytes, id)
             end
         end
+    end
+
+    return ptr
+end
+
+function unsafe_alloc(
+    ::PoolType{PMM},
+    manager::CacheManager,
+    bytes,
+    id::UInt = getid(manager),
+    cleanup_function::F = cleanup,
+) where {F}
+    @requires alloc_lock(manager)
+
+    @timeit "PMM Alloc" begin
+        heap = manager.pmm_heap
+        candrain(manager.freebuffer) && cleanup_function(manager)
+        ptr = alloc(heap, bytes, id)
+
+        # # If we still don't have anything, run a full GC.
+        # if ptr === nothing
+        #     @timeit "PMM Alloc GC" begin
+        #         GC.gc(true)
+        #         cleanup_function(manager)
+        #         ptr = alloc(heap, bytes, id)
+        #     end
+        # end
+    end
+
+    if ptr === nothing
+        error("Cannot Allocate from PMM")
     end
 
     return ptr
@@ -474,50 +503,37 @@ free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) =
 free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing}) =
     free(manager.pmm_heap, ptr)
 
-function doeviction!(manager, bytes)
-    # The full storage storage types for policies may contain
-    # extra metadata.
-    stack = fulleltype(manager.policy)[]
+doeviction!(manager::CacheManager, bytes) =
+    @spinlock remove_lock(manager.freebuffer) unsafe_eviction!(manager, bytes)
+function unsafe_eviction!(manager::CacheManager, bytes)
+    @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
     # The eviction callback
     cb = block -> moveto!(PoolType{PMM}(), block, manager)
 
-    # TODO: Since the heap upgrade, we can restructure this.
     local block
     while true
-        # Pop an item from the policy
-        push!(stack, fullpop!(manager.policy))
-        block = getval(Block, last(stack))
+        isempty(manager.policy) && return nothing
+        token = fullpop!(manager.policy)
+        block = getval(Block, token)
 
-        canallocfrom(manager.dram_heap, block, bytes) && break
+        # Block is queued for freeing - no need to move it.
+        # Put it back into the policy tracker to avoid messing it up and perform
+        # a cleanup.
+        if isqueued(block)
+            push!(manager.policy, token)
+            unsafe_cleanup(manager)
 
-        # Display the stack because what in the world happened??
-        if isempty(manager.policy)
-            display(stack)
+            # TODO: Might be able to check at this point if we can allocate for real.
+            continue
         end
-    end
 
-    # Put back all of the items in the LRU that we didn't use.
-    while !isempty(stack)
-        push!(manager.policy, pop!(stack))
+        @check canallocfrom(manager.dram_heap, block, bytes)
+        break
     end
 
     # Perform our managed eviction.
     evictfrom!(manager.dram_heap, block, bytes; cb = cb)
-
-    # Now that we've guarenteed that we have a block available in our requested size,
-    # Clean up items from the cache.
-    target = ceil(Int, manager.dram_heap.len * manager.flushpercent)
-
-    while localsize(manager) >= target
-        block = pop!(manager.policy)
-        @check canallocfrom(manager.dram_heap, block, block.size - headersize())
-
-        # Need to use the more powerful "evictfrom!" since it correctly puts the
-        # heap back together.
-        evictfrom!(manager.dram_heap, block, block.size - headersize(); cb = cb)
-    end
-
     return nothing
 end
 
@@ -534,91 +550,99 @@ function moveto!(
     dirty = true,
     write_before_read = false,
 )
+    @requires alloc_lock(M) remove_lock(M.freebuffer)
 
     id = getid(block)
+    println("Moving block $id to DRAM")
 
-    @lock M.lock begin
-        # If the data is already local, mark a usage and return.
-        if getpool(block) == DRAM
-            # TODO: Fix
-            #update!(PoolType{DRAM}(), M, A)
-            return nothing
-        end
-
-        # If this block is NOT in DRAM, then it shouldn't have a sibling.
-        @check getsibling(block) === nothing
-
-        # Otherwise, we need to allocate some local data for it.
-        storage_ptr = unsafe_alloc(PoolType{DRAM}(), M, length(block), id)
-
-        # If we're assured that we're doing a write before a read, then we can avoid
-        # copying over the the remote storage
-        if !write_before_read
-            _memcpy!(storage_ptr, datapointer(block), length(block))
-        end
-
-        # Get the block for the newly created Array.
-        # Here, we have to maintain some metadata.
-        newblock = unsafe_block(storage_ptr)
-
-        setsibling!(newblock, block)
-        setsibling!(block, newblock)
-
-        # Check if this block has multiple watchers.
-        # If so, update all references to this block.
-        pmm = PoolType{PMM}()
-        ptr = getobjects(pmm, M)[id]
-        unsafe_store!(ptr, storage_ptr)
-        register!(dram, M, newblock, ptr)
-
-        # Set the dirty flag.
-        # If `write_before_read` is true, then we MUST mark this block as dirty.
-        flag = write_before_read | dirty
-        setdirty!(newblock, flag)
-        setdirty!(M.policy, newblock, flag)
+    # If the data is already local, mark a usage and return.
+    if getpool(block) == DRAM
+        # TODO: Fix
+        #update!(PoolType{DRAM}(), M, A)
+        return nothing
     end
+
+    # If this block is NOT in DRAM, then it shouldn't have a sibling.
+    @check getsibling(block) === nothing
+
+    # Otherwise, we need to allocate some local data for it.
+    storage_ptr = unsafe_alloc(
+        PoolType{DRAM}(),
+        M,
+        length(block),
+        id,
+        unsafe_cleanup!,
+        unsafe_eviction!,
+    )
+
+    # If we're assured that we're doing a write before a read, then we can avoid
+    # copying over the the remote storage
+    if !write_before_read
+        _memcpy!(storage_ptr, datapointer(block), length(block))
+    end
+
+    # Get the block for the newly created Array.
+    # Here, we have to maintain some metadata.
+    newblock = unsafe_block(storage_ptr)
+
+    setsibling!(newblock, block)
+    setsibling!(block, newblock)
+
+    # Check if this block has multiple watchers.
+    # If so, update all references to this block.
+    pmm = PoolType{PMM}()
+    ptr = getobjects(pmm, M)[id]
+    unsafe_store!(ptr, storage_ptr)
+    unsafe_register!(dram, M, newblock, ptr)
+
+    # Set the dirty flag.
+    # If `write_before_read` is true, then we MUST mark this block as dirty.
+    flag = write_before_read | dirty
+    setdirty!(newblock, flag)
+    setdirty!(M.policy, newblock, flag)
     return nothing
 end
 
 function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
+    @requires alloc_lock(M) remove_lock(M.freebuffer)
+
     id = getid(block)
-    @lock M.lock begin
-        # If already in PMM, do nothing
-        getpool(block) == PMM && return nothing
-        sibling = getsibling(block)
+    println("Moving block $id to PM")
+    # If already in PMM, do nothing
+    getpool(block) == PMM && return nothing
+    sibling = getsibling(block)
 
-        # If this block has a sibling and it is clean, we can elide write back.
-        # Otherwise, we have to write back.
-        createstorage = (sibling === nothing)
-        if createstorage
-            storage_ptr = unsafe_alloc(PoolType{PMM}(), M, length(block), id)
-            sibling = unsafe_block(storage_ptr)
-        else
-            storage_ptr = datapointer(sibling)
-        end
-
-        @check getid(sibling) == id
-
-        if isdirty(block) || createstorage
-            # Since `storage_ptr` is just a pointer, we have to manually inform the copy engine
-            # how many threads to use.
-            nthreads = min(Threads.nthreads(), 4)
-            _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
-        end
-
-        # Update back edges
-        dram = PoolType{DRAM}()
-        ptr = getobjects(dram, M)[id]
-        unsafe_store!(ptr, storage_ptr)
-        createstorage && register!(pool, M, sibling, ptr)
-
-        # Deregister this object from local tracking.
-        unregister!(dram, M, block)
-
-        # Free the block we just removed.
-        free(dram, M, block)
-        setsibling!(sibling, Block())
+    # If this block has a sibling and it is clean, we can elide write back.
+    # Otherwise, we have to write back.
+    createstorage = (sibling === nothing)
+    if createstorage
+        storage_ptr = unsafe_alloc(PoolType{PMM}(), M, length(block), id, unsafe_cleanup!)
+        sibling = unsafe_block(storage_ptr)
+    else
+        storage_ptr = datapointer(sibling)
     end
+
+    @check getid(sibling) == id
+
+    if isdirty(block) || createstorage
+        # Since `storage_ptr` is just a pointer, we have to manually inform the copy engine
+        # how many threads to use.
+        nthreads = min(Threads.nthreads(), 4)
+        _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
+    end
+
+    # Update back edges
+    dram = PoolType{DRAM}()
+    ptr = getobjects(dram, M)[id]
+    unsafe_store!(ptr, storage_ptr)
+    createstorage && unsafe_register!(pool, M, sibling, ptr)
+
+    # Deregister this object from local tracking.
+    unsafe_unregister!(dram, M, block)
+
+    # Free the block we just removed.
+    free(dram, M, block)
+    setsibling!(sibling, Block())
     return nothing
 end
 

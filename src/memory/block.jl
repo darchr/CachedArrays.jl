@@ -15,13 +15,14 @@ struct PoolType{T} end
 # bytes 7..0
 #    The top 58 bits describe the size of the memory for this block
 #    The lower 6 bits are reserved for misc metadata.
-#       We can save the lower 6 bites because we assume sizes are always multiples of 64 bytes.
+#       We can save the lower 6 bits because we assume sizes are always multiples of 64 bytes.
 #       TODO: We can actually do better since sizes will be multiples of MIN_ALLOCATION.
 #
 #       bit 0: 1 if the block is free, 0 if it is not free.
 #       bit 1-2: Pool ID: 00 if DRAM, 01 if PMM. These bits correspond to the `Pool` enum.
 #       bit 3: dirty bit: 0 if clean, 1 if dirty
 #       bit 4: evicting bit: 0 if normal free, 1 if being evicted
+#       big 5: queued bit: 1 if queued for freeing, 0 otherwise
 #
 #    Size can be obtained with `block.size`.
 #    The free state is obtained with `block.free`.
@@ -114,6 +115,8 @@ function Base.getproperty(x::Block, name::Symbol)
         return Bool(@getbits(UInt, pointer(x), 3))
     elseif name == :evicting
         return Bool(@getbits(UInt, pointer(x), 4))
+    elseif name == :queued
+        return Bool(@getbits(UInt, pointer(x), 5))
 
     # Bytes 15..8
     elseif name == :next
@@ -149,6 +152,8 @@ function Base.setproperty!(x::Block, name::Symbol, v)
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 3)
     elseif name == :evicting
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 4)
+    elseif name == :queued
+        @setbits!(UInt8, pointer(x), UInt8(v::Bool), 5)
 
     # bytes 15..8
     elseif name == :next
@@ -187,6 +192,9 @@ function getsibling(x::Block)
 end
 
 setsibling!(x::Block, y::Block) = (x.sibling = y)
+
+@inline markqueued!(x::Block) = (x.queued = true)
+@inline isqueued(x::Block) = x.queued
 
 #####
 ##### Display

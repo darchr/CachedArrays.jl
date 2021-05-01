@@ -19,5 +19,5 @@ include("policy/lru.jl")
 
 include("manager.jl")
 include("array/array.jl")
-include("array/locked.jl")
+# include("array/locked.jl")
 
