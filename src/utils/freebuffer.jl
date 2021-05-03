@@ -14,14 +14,13 @@ remove_lock(buf::FreeBuffer) = buf.remove_lock
 candrain(buf::FreeBuffer) = !isempty(buf.add)
 
 function Base.push!(buf::FreeBuffer, x)
-    ccall(:jl_safe_printf, Cvoid, (Cstring,), "Aquiring Free Lock\n");
     @spinlock add_lock(buf) begin
         # Indicate that this object has been queued for freeing.
         # Helps with eviction logic.
         markqueued!(x)
         push!(buf.add, x)
     end
-    ccall(:jl_safe_printf, Cvoid, (Cstring,), "Lock Released\n");
+    VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Released $(getid(x))\n");
 end
 
 # Assumes that the "remove" lock is already held.

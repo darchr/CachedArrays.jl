@@ -100,4 +100,3 @@ end
     @test CachedArrays.gc_managers() == 1
 end
 
-

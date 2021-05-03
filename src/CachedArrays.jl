@@ -20,9 +20,11 @@ import TimerOutputs
 # Control whether asserts are active
 # Default to `true` for now because of development
 const DEBUG = true
+const VERBOSE = false
+const ENABLETIMING = false
 
 # Check ALL array updates for correctness.
-const PEDANTIC = false      # TODO: Currently Broken
+# const PEDANTIC = false      # TODO: Currently Broken
 
 # Flag to indicate if we're in 2LM.
 # If we are, configure the system to error if we ever try to allocate remote memory.
@@ -55,7 +57,6 @@ end
 ##### Optional Timing
 #####
 
-const ENABLETIMING = false
 @static if ENABLETIMING
     const GLOBAL_TIMER = TimerOutputs.TimerOutput()
     macro timeit(label, expr)
@@ -152,44 +153,4 @@ function gc_managers()
     return length(i)
 end
 
-#####
-##### Tracer
-#####
-
-import Cassette
-Cassette.@context TraceCtx
-
-mutable struct TraceMetadata
-    fns::DataStructures.OrderedSet{String}
-end
-
-# function Cassette.overdub(ctx::TraceCtx, f, args...)
-#     meta = ctx.metadata
-#     push!(meta.fns, f)
-#     result = Cassette.recurse(ctx, f, args...)
-#     return result
-# end
-
-Cassette.overdub(ctx::TraceCtx, ::typeof(unsafe_alloc), x...) = unsafe_alloc(x...)
-Cassette.overdub(ctx::TraceCtx, ::typeof(register!), x...) = register!(x...)
-Cassette.overdub(ctx::TraceCtx, ::typeof(cleanup), x...) = cleanup(x...)
-
-function Cassette.prehook(ctx::TraceCtx, f::F, args::Vararg{Any,N}) where {F<:Function,N}
-    try
-        push!(ctx.metadata.fns, string(which(f, Tuple{_typeof.(args)...})))
-    catch err
-    end
-    return nothing
-end
-
-_typeof(x) = typeof(x)
-_typeof(::Type{T}) where {T} = T
-
-function trace(f, args...)
-    ctx = TraceCtx(; metadata = TraceMetadata(DataStructures.OrderedSet{String}()))
-    Cassette.overdub(ctx, f, args...)
-    return ctx.metadata.fns
-end
-
 end # module
-
