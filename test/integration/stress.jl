@@ -79,7 +79,7 @@ end
     CachedArrays.reset_timer!()
     arrays = Set{ArrayPairWithLifetime}()
     println("Beginning Stress Test")
-    @time for _i in 1:target_allocations
+    @time ProgressMeter.@showprogress 1 for _i in 1:target_allocations
         epoch(manager, arrays, generator; allocate = true)
         # @test CachedArrays.check(manager)
         CachedArrays.check(manager) || error()

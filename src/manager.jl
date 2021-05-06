@@ -190,28 +190,22 @@ pool(A) = getpool(metadata(A))
 
 function prefetch!(A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) begin
-        @spinlock remove_lock(_manager.freebuffer) begin
-            moveto!(PoolType{DRAM}(), A, _manager; kw...)
-        end
+    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+        moveto!(PoolType{DRAM}(), A, _manager; kw...)
     end
 end
 
 function shallowfetch!(A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) begin
-        @spinlock remove_lock(_manager.freebuffer) begin
-            moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
-        end
+    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+        moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
     end
 end
 
 function evict!(A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) begin
-        @spinlock remove_lock(_manager.freebuffer) begin
-            moveto!(PoolType{PMM}(), A, manager(A); kw...)
-        end
+    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+        moveto!(PoolType{PMM}(), A, manager(A); kw...)
     end
 end
 
