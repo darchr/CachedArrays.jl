@@ -20,7 +20,7 @@ function Base.push!(buf::FreeBuffer, x)
         markqueued!(x)
         push!(buf.add, x)
     end
-    VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Released $(getid(x))\n");
+    # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Released $(getid(x))\n");
 end
 
 # Assumes that the "remove" lock is already held.

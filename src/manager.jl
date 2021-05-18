@@ -92,7 +92,7 @@ function CacheManager(
     remotesize = 1_000_000_000,
     policy = LRU{Block}(),
     flushpercent = Float32(1),
-    gc_before_evict = false,
+    gc_before_evict = true,
     minallocation = 10,
 )
 
@@ -287,7 +287,7 @@ function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr)
     end
     objects[id] = convert(Ptr{Ptr{Nothing}}, ptr)
     adjust_size!(pool, M, length(block))
-    VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Registered block $(getid(block)) in $T\n")
+    # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Registered block $(getid(block)) in $T\n")
     return nothing
 end
 
@@ -312,7 +312,7 @@ function unsafe_unregister!(pool::PoolType{T}, M::CacheManager, block::Block) wh
         in(block, M.policy) && delete!(M.policy, block)
     end
     adjust_size!(pool, M, -length(block))
-    VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Unregistered block $(getid(block)) from $T\n")
+    # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Unregistered block $(getid(block)) from $T\n")
     return nothing
 end
 
@@ -433,15 +433,15 @@ function unsafe_alloc(
         heap = manager.dram_heap
         candrain(manager.freebuffer) && cleanup_function(manager)
 
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to allocate id $id in DRAM\n")
+        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to allocate id $id in DRAM\n")
         ptr = alloc(heap, bytes, id)
 
         # If allocation failed, try a GC
         if manager.gc_before_evict && ptr === nothing
             @timeit "DRAM Alloc GC" begin
-                VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying GC\n")
+                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying GC\n")
                 # Trigger full GC, then incremental GC to try to get finalizers to run.
-                GC.gc(true)
+                GC.gc(false)
                 # candrain(manager.freebuffer) || cleanup_function(manager)
                 ptr = alloc(heap, bytes, id)
             end
@@ -449,7 +449,7 @@ function unsafe_alloc(
 
         if ptr === nothing && manager.allow_movement
             @timeit "DRAM Alloc Eviction" begin
-                VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying eviction\n")
+                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying eviction\n")
                 eviction_function(manager, bytes)
                 ptr = alloc(manager.dram_heap, bytes, id)
             end
@@ -474,15 +474,15 @@ function unsafe_checked_alloc(
         if candrain(manager.freebuffer) && cleanup_function(manager, id)
             return Ptr{Nothing}()
         end
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "[checked] Trying to allocate id $id in DRAM\n")
+        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "[checked] Trying to allocate id $id in DRAM\n")
         ptr = alloc(heap, bytes, id)
 
         # If allocation failed, try a GC
         if manager.gc_before_evict && ptr === nothing
             @timeit "DRAM Alloc GC" begin
-                VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying GC\n")
+                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying GC\n")
                 # Trigger full GC, then incremental GC to try to get finalizers to run.
-                GC.gc(true)
+                GC.gc(false)
                 # candrain(manager.freebuffer) || cleanup_function(manager)
                 ptr = alloc(heap, bytes, id)
             end
@@ -490,7 +490,7 @@ function unsafe_checked_alloc(
 
         if ptr === nothing && manager.allow_movement
             @timeit "DRAM Alloc Eviction" begin
-                VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying eviction\n")
+                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying eviction\n")
                 eviction_function(manager, bytes)
                 ptr = alloc(manager.dram_heap, bytes, id)
             end
@@ -511,13 +511,19 @@ function unsafe_alloc(
 
     @timeit "PMM Alloc" begin
         heap = manager.pmm_heap
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to allocate id $id in PM\n")
+        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to allocate id $id in PM\n")
         candrain(manager.freebuffer) && cleanup_function(manager)
         ptr = alloc(heap, bytes, id)
     end
 
     if ptr === nothing
-        error("Cannot Allocate from PMM")
+        GC.gc(true)
+        candrain(manager.freebuffer) && cleanup_function(manager)
+        ptr = alloc(heap, bytes, id)
+    end
+
+    if ptr === nothing
+        error("Cannot Allocate from PM")
     end
 
     return ptr
@@ -539,12 +545,18 @@ function unsafe_checked_alloc(
             # the allocation process.
             return Ptr{Nothing}()
         end
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "[checked] Trying to allocate id $id in PM\n")
+        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "[checked] Trying to allocate id $id in PM\n")
         ptr = alloc(heap, bytes, id)
     end
 
     if ptr === nothing
-        error("Cannot Allocate from PMM")
+        GC.gc(true)
+        candrain(manager.freebuffer) && cleanup_function(manager)
+        ptr = alloc(heap, bytes, id)
+    end
+
+    if ptr === nothing
+        error("Cannot Allocate from PM")
     end
 
     return ptr
@@ -704,6 +716,7 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
         # Since `storage_ptr` is just a pointer, we have to manually inform the copy engine
         # how many threads to use.
         nthreads = min(Threads.nthreads(), 4)
+        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Copying data for block $(getid(block))");
         _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
     end
 
