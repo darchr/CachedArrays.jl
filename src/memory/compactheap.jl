@@ -25,6 +25,7 @@ mutable struct CompactHeap{T} <: AbstractHeap
     # Maintaining freelist status
     status::FindNextTree
     freelists::Vector{Freelist{Block}}
+    canalloc::Bool
 end
 
 function CompactHeap(
@@ -34,7 +35,6 @@ function CompactHeap(
     # Power of two
     minallocation = PowerOfTwo(21),
 ) where {T}
-
     minallocation = poweroftwo(minallocation)
 
     # Round down size to the nearest multiple of `minallocation`
@@ -46,7 +46,7 @@ function CompactHeap(
     status = FindNextTree(numbins)
     freelists = [Freelist{Block}() for _ = 1:numbins]
 
-    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists)
+    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists, true)
 
     finalizer(heap) do x
         free(x.allocator, x.base)
@@ -164,6 +164,20 @@ function Base.pop!(heap::CompactHeap, bin)
     return block
 end
 
+function canpop(heap::CompactHeap, bin)
+    list = @inbounds heap.freelists[bin]
+    if !isempty(list)
+        return true
+    end
+
+    # Okay, we don't have a block.
+    # We need to get the next highest available block and split it.
+    nextbin = @inbounds(findnext(heap.status, bin))
+
+    # No bigger block available - cannot allocate.
+    return nextbin === nothing ? false : true
+end
+
 function remove!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
     list = @inbounds(heap.freelists[bin])
@@ -181,6 +195,8 @@ function putback!(heap::CompactHeap, block::Block)
     previous = walkprevious(heap, block)
     next = walknext(heap, block)
 
+    # If the block before this one is being evicted, we don't want to merge since that
+    # will break upstream logic.
     if previous !== nothing && isfree(previous)
         remove!(heap, previous)
         previous.size += block.size
@@ -188,6 +204,8 @@ function putback!(heap::CompactHeap, block::Block)
     end
 
     if next !== nothing
+        # Similar to the case with "block.previous", if the next block is being evicted,
+        # we don't want to try to merge since that will break eviction logic.
         if isfree(next)
             remove!(heap, next)
             block.size += next.size
@@ -211,6 +229,7 @@ end
 #####
 
 function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
+    heap.canalloc || error("Uh oh")
     iszero(bytes) && return nothing
 
     needed_size = max(bytes + headersize(), one(bytes) << heap.minallocation.val)
@@ -223,16 +242,32 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     block.free = false
     block.evicting = false
     block.queued = false
+    block.reclaimed = false
     block.id = id
     block.pool = heap.pool
 
+    safeprint("[HEAP] Allocated $id")
     ptr = pointer(block) + headersize()
     return ptr
 end
 
+function canalloc(heap::CompactHeap, bytes::Integer)
+    iszero(bytes) && return false
+
+    needed_size = max(bytes + headersize(), one(bytes) << heap.minallocation.val)
+    needed_size > sizeof(heap) && return false
+    bin = getbin(heap, needed_size)
+    return canpop(heap, bin)
+end
+
 function free(heap::CompactHeap, ptr::Ptr{Nothing})
     block = unsafe_block(ptr)
-    block.evicting == true && return nothing
+    if block.evicting == true
+        safeprint("[HEAP] Reclaiming $(getid(block))")
+        block.reclaimed = true
+        return nothing
+    end
+    safeprint("[HEAP] Freeing $(getid(block))")
     block.free = true
     putback!(heap, block)
     return nothing
@@ -250,18 +285,26 @@ function unsafe_free!(f, block::Block)
     @check !isfree(block)
 
     # Mark this block as being evicted.
-    # This will short-circuit any calls to `free` the result from the callback
+    # This will short-circuit any calls to `free` the result from the callback while
+    # still keeping the block as `not-free` to be compatible with the other heap logic.
     block.evicting = true
 
     # Do the callback on the block and then mark the blocked as freed.
-    f(block)
-    block.free = true
-    return nothing
+    abort = f(block)
+
+    # Don't mark the block as free.
+    # We still own it and all will be freed after eviction.
+    return abort
 end
 
 function evict!(f::F, heap, block) where {F}
-    isfree(block) ? remove!(heap, block) : unsafe_free!(f, block)
-    return nothing
+    if isfree(block)
+        remove!(heap, block)
+        block.free = false
+        return nothing
+    else
+        return unsafe_free!(f, block)
+    end
 end
 
 # Helper method to get a block from a pointer.
@@ -270,28 +313,81 @@ function evictfrom!(heap::CompactHeap, ptr::Ptr{Nothing}, sz; kw...)
 end
 
 function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
+    heap.canalloc = false
     sizefreed = 0
+    last = block
     current = block
+
+    aborted = false
+
+    # NOTE ON ABORTING.
+    # Control flow must always pass through the bottom of this function to ensure
+    # that even if an eviction is aborted early that we maintain the heap in a
+    # consistent state.
+
     # Walk forward until either we have freed enough space or reach the end of the heap.
     while true
+        abort = evict!(cb, heap, current)
+
+        # Check for early abort
+        if (abort !== nothing) && (abort == true)
+            # Cleanup eviction status
+            current.evicting = false
+
+            # Aborted on the first block.
+            # If this block was NOT reclaimed as a side-effect of the eviction callback,
+            # then we need to rollback the current block to the last successfully
+            # processed block.
+            #
+            # However, if this block was recaimed, then it is free but hasn't been
+            # put back on the heap.
+            #
+            # As a result, we need to include it in the freed frontier.
+            if current.reclaimed
+                sizefreed += current.size
+            else
+                iszero(sizefreed) && return nothing
+                current = last
+            end
+
+            aborted = true
+            return break
+        end
         sizefreed += current.size
-        evict!(cb, heap, current)
+
+        # Update state
+        last = current
         current = walknext(heap, current)
         # If we've either freed enough memory or walked off the end of the array, exit.
         (sizefreed >= sz || current === nothing) && break
     end
 
     # Walk backwards if we have to in order to free enough space.
-    while sizefreed < sz
-        block = walkprevious(heap, block)
-        sizefreed += block.size
-        evict!(cb, heap, block)
+    if !aborted
+        while sizefreed < sz
+            block = walkprevious(heap, block)
+            abort = evict!(cb, heap, block)
+            if (abort !== nothing) && (abort == true)
+                block.evicting = false
+                if !block.reclaimed
+                    # Roll back block to last successful eviction.
+                    block = walknext(heap, block)
+                else
+                    sizefreed += block.size
+                end
+                safeprint("Aborting eviction! [2]"; force = true)
+                break
+            end
+            sizefreed += block.size
+        end
     end
 
     # Resize our block and put it back in the heap.
     block.free = true
+    block.reclaimed = false
     block.size = sizefreed
     putback!(heap, block)
+    heap.canalloc = true
     return nothing
 end
 

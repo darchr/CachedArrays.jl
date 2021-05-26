@@ -136,3 +136,50 @@
         end
     end
 end
+
+@testset "Testing Evition Corner Cases" begin
+    # This tests the case where we have the following scenario:
+    #
+    #                 Evicted      Evicting
+    #                    |             |
+    #                    V             V
+    # +------------+-------------+-----------+
+    # |     A      |     B       |     C     |
+    # +------------+-------------+-----------+
+    #       ∧
+    #       |
+    # Freed during eviction callback
+    #
+    # In other words, block B is being evicted and during the eviction process, Block A
+    # is freed.
+    #
+    # Even though block B may be next to block A in the heap, we want to prevent block A and
+    # B from merging since that breaks the eviction logic.
+    #
+    # I.E. Eviction assumes that all blocks actively touched during the eviction process
+    # do not belong to any freelist.
+
+    # Small heap - enough for 6 allocations.
+    allocator = CachedArrays.AlignedAllocator()
+    heap = CachedArrays.CompactHeap(allocator, 6 * 4096; minallocation = 12)
+
+    A = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 10))
+    B = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 0))
+    C = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 20))
+
+    @test CachedArrays.getid(A) == 10
+    @test CachedArrays.getid(B) == 0
+    @test CachedArrays.getid(C) == 20
+
+    # Callback function will free "A".
+    # This will occur while "B" is being evicted.
+    cb = function(block)
+        if CachedArrays.getid(block) == CachedArrays.getid(C)
+            CachedArrays.free(heap, CachedArrays.datapointer(A))
+        end
+    end
+
+    CachedArrays.evictfrom!(heap, B, 2 * 4096; cb = cb)
+    @test CachedArrays.check(heap)
+    @test length(heap) == 1
+end

@@ -41,6 +41,13 @@ end
 Base.pointer(region::Region) = region.ptr
 datapointer(region::Region) = pointer_from_objref(region)
 
+mutable struct AbortCallback{H}
+    heap::CompactHeap{H}
+    bytes::Int
+end
+
+(f::AbortCallback)() = canalloc(f.heap, f.bytes)
+
 # Maintains Cache management.
 mutable struct CacheManager{C}
     # Reference to local objects
@@ -66,18 +73,8 @@ mutable struct CacheManager{C}
     freebuffer::FreeBuffer{Block}
 
     ## local tunables
-
-    # We trigger a full GC before trying to evict items from the local cache.
-    # Try to take advantage of that GC to flush items from the cache until (1-FLUSHPERCENT)
-    # of the cache is free.
-    flushpercent::Float32
-
-    # Sometimes, doing a GC before flushing isn't helpful and just results in us spending
-    # too much time in the GC.
-    #
-    # TODO: In the future, I'd like to have this be auto-determined by whether GC actually
-    # freed anything, but for now set or disable it manually.
-    gc_before_evict::Bool
+    gc_when_over::Int
+    abort_callback::AbortCallback{AlignedAllocator}
 
     ## Prevent arrays from moving
     allow_movement::Bool
@@ -91,14 +88,9 @@ function CacheManager(
     localsize = 1_000_000_000,
     remotesize = 1_000_000_000,
     policy = LRU{Block}(),
-    flushpercent = Float32(1),
-    gc_before_evict = true,
+    gc_when_over = 0.95,
     minallocation = 10,
 )
-
-    # Argument conversion
-    flushpercent = Float32(flushpercent)
-
     # If we're in 2LM, pass a nullptr.
     # MemKindAllocator gets swapped to something that throws an error if called.
     if IS_2LM
@@ -142,8 +134,8 @@ function CacheManager(
         FreeBuffer{Block}(),
 
         # tunables,
-        flushpercent,
-        gc_before_evict,
+        floor(Int, gc_when_over * sizeof(dram_heap)),
+        AbortCallback(dram_heap, 0),
 
         # runtime settings
         allow_movement,
@@ -287,7 +279,7 @@ function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr)
     end
     objects[id] = convert(Ptr{Ptr{Nothing}}, ptr)
     adjust_size!(pool, M, length(block))
-    # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Registered block $(getid(block)) in $T\n")
+    safeprint("Registered block $(getid(block)) in $T")
     return nothing
 end
 
@@ -312,7 +304,7 @@ function unsafe_unregister!(pool::PoolType{T}, M::CacheManager, block::Block) wh
         in(block, M.policy) && delete!(M.policy, block)
     end
     adjust_size!(pool, M, -length(block))
-    # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Unregistered block $(getid(block)) from $T\n")
+    safeprint("Unregistered block $(getid(block)) from $T")
     return nothing
 end
 
@@ -344,6 +336,7 @@ prepare_cleanup!(manager::CacheManager) = unsafe_swap!(manager.freebuffer)
 function unsafe_cleanup!(M::CacheManager, id = nothing)
     @requires alloc_lock(M) remove_lock(M.freebuffer)
     id_cleaned = false
+
     while true
         cleanlist = unsafe_get(M.freebuffer)
 
@@ -433,25 +426,35 @@ function unsafe_alloc(
         heap = manager.dram_heap
         candrain(manager.freebuffer) && cleanup_function(manager)
 
-        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to allocate id $id in DRAM\n")
+        # See if we should trigger an incremental GC
+        if manager.size_of_local >= manager.gc_when_over
+            safeprint("Triggering capacity GC")
+            GC.gc(false)
+        end
+
+        safeprint("Trying to allocate id $id in DRAM")
         ptr = alloc(heap, bytes, id)
 
         # If allocation failed, try a GC
-        if manager.gc_before_evict && ptr === nothing
+        if ptr === nothing
             @timeit "DRAM Alloc GC" begin
-                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying GC\n")
+                safeprint("    Allocation failed - trying incremental GC")
                 # Trigger full GC, then incremental GC to try to get finalizers to run.
                 GC.gc(false)
-                # candrain(manager.freebuffer) || cleanup_function(manager)
+                candrain(manager.freebuffer) || cleanup_function(manager)
                 ptr = alloc(heap, bytes, id)
             end
         end
 
         if ptr === nothing && manager.allow_movement
             @timeit "DRAM Alloc Eviction" begin
-                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying eviction\n")
-                eviction_function(manager, bytes)
+                safeprint("    Allocation failed - trying eviction")
+                canabort = manager.abort_callback
+                canabort.bytes = bytes
+
+                eviction_function(manager, bytes; canabort = canabort)
                 ptr = alloc(manager.dram_heap, bytes, id)
+                block = unsafe_block(ptr)
             end
         end
     end
@@ -474,13 +477,20 @@ function unsafe_checked_alloc(
         if candrain(manager.freebuffer) && cleanup_function(manager, id)
             return Ptr{Nothing}()
         end
-        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "[checked] Trying to allocate id $id in DRAM\n")
+
+        # See if we should trigger an incremental GC
+        if manager.size_of_local >= manager.gc_when_over
+            safeprint("Triggering capacity GC")
+            GC.gc(false)
+        end
+
+        safeprint("[checked] Trying to allocate id $id in DRAM")
         ptr = alloc(heap, bytes, id)
 
         # If allocation failed, try a GC
-        if manager.gc_before_evict && ptr === nothing
+        if ptr === nothing
             @timeit "DRAM Alloc GC" begin
-                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying GC\n")
+                safeprint("    Allocation failed - trying GC")
                 # Trigger full GC, then incremental GC to try to get finalizers to run.
                 GC.gc(false)
                 # candrain(manager.freebuffer) || cleanup_function(manager)
@@ -490,9 +500,15 @@ function unsafe_checked_alloc(
 
         if ptr === nothing && manager.allow_movement
             @timeit "DRAM Alloc Eviction" begin
-                # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Allocation failed - trying eviction\n")
-                eviction_function(manager, bytes)
+                safeprint("    Allocation failed - trying eviction")
+                #canabort = canalloc(heap, bytes)
+                canabort = manager.abort_callback
+                canabort.bytes = bytes
+
+                eviction_function(manager, bytes; canabort = canabort)
                 ptr = alloc(manager.dram_heap, bytes, id)
+                block = unsafe_block(ptr)
+                safeprint("    [checked] Block: $block")
             end
         end
     end
@@ -511,7 +527,7 @@ function unsafe_alloc(
 
     @timeit "PMM Alloc" begin
         heap = manager.pmm_heap
-        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to allocate id $id in PM\n")
+        safeprint("Trying to allocate id $id in PM")
         candrain(manager.freebuffer) && cleanup_function(manager)
         ptr = alloc(heap, bytes, id)
     end
@@ -534,26 +550,38 @@ function unsafe_checked_alloc(
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager),
-    cleanup_function::F = cleanup,
-) where {F}
+    cleanup_function::F = cleanup;
+    canabort::A = alwaysfalse,
+) where {F,A}
     @requires alloc_lock(manager)
 
     @timeit "PMM Alloc" begin
         heap = manager.pmm_heap
-        if candrain(manager.freebuffer) && cleanup_function(manager, id)
-            # Return null pointer to indicate that the requested ID was freed during
-            # the allocation process.
-            return Ptr{Nothing}()
+        if candrain(manager.freebuffer)
+            # If this block gets cleaned up, then first check if it's okay to abort
+            # the eviction operation.
+            #
+            # If so, return `nothing` do indicate such.
+            #
+            # If it is NOT okay to abort the eviction operation, but the block was
+            # cleaned, return a null ptr.
+            cleaned = cleanup_function(manager, id)
+            canabort() && return nothing
+            cleaned && return Ptr{Nothing}()
         end
-        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "[checked] Trying to allocate id $id in PM\n")
+        safeprint("[checked] Trying to allocate id $id in PM")
         ptr = alloc(heap, bytes, id)
     end
 
-    if ptr === nothing
-        GC.gc(true)
-        candrain(manager.freebuffer) && cleanup_function(manager)
-        ptr = alloc(heap, bytes, id)
-    end
+    # if ptr === nothing
+    #     GC.gc(true)
+    #     if candrain(manager.freebuffer)
+    #         cleanup_function(manager)
+    #         canabort() && return Ptr{Nothing}()
+    #     end
+
+    #     ptr = alloc(heap, bytes, id)
+    # end
 
     if ptr === nothing
         error("Cannot Allocate from PM")
@@ -572,13 +600,15 @@ free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing}) =
 free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing}) =
     free(manager.pmm_heap, ptr)
 
-doeviction!(manager::CacheManager, bytes) =
-    @spinlock remove_lock(manager.freebuffer) unsafe_eviction!(manager, bytes)
-function unsafe_eviction!(manager::CacheManager, bytes)
+function doeviction!(manager::CacheManager, bytes; canabort::F = alwaysfalse) where {F}
+    @spinlock remove_lock(manager.freebuffer) unsafe_eviction!(manager, bytes; canabort)
+end
+
+function unsafe_eviction!(manager::CacheManager, bytes; canabort::F = alwaysfalse) where {F}
     @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
     # The eviction callback
-    cb = block -> moveto!(PoolType{PMM}(), block, manager)
+    cb = block -> moveto!(PoolType{PMM}(), block, manager; canabort)
 
     local block
     while true
@@ -594,7 +624,7 @@ function unsafe_eviction!(manager::CacheManager, bytes)
             unsafe_cleanup(manager)
 
             # TODO: Might be able to check at this point if we can allocate for real.
-            continue
+            return nothing
         end
 
         @check canallocfrom(manager.dram_heap, block, bytes)
@@ -620,7 +650,7 @@ function moveto!(
     write_before_read = false,
 )
     @requires alloc_lock(M) remove_lock(M.freebuffer)
-    VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to move block: $(getid(block)) to DRAM\n");
+    safeprint("Trying to move block: $(getid(block)) to DRAM")
 
     id = getid(block)
 
@@ -647,7 +677,7 @@ function moveto!(
     # Null pointer returned - corresponding block in PMM has been freed.
     # No need to finish the move.
     if isnull(storage_ptr)
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Aborting Move of block $(getid(block)) - block has been freed\n");
+        safeprint("    Aborting Move of block $(getid(block)) - block has been freed")
         return nothing
     end
 
@@ -679,7 +709,7 @@ function moveto!(
     return nothing
 end
 
-function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
+function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager; canabort = alwaysfalse)
     @requires alloc_lock(M) remove_lock(M.freebuffer)
 
     dram = PoolType{DRAM}()
@@ -687,14 +717,25 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
     # If already in PMM, do nothing
     getpool(block) == PMM && return nothing
     sibling = getsibling(block)
-    VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Trying to move block: $(getid(block)) to PM\n");
+    safeprint("Trying to move block: $(getid(block)) to PM")
 
     # If this block has a sibling and it is clean, we can elide write back.
     # Otherwise, we have to write back.
     createstorage = (sibling === nothing)
     if createstorage
-        storage_ptr =
-            unsafe_checked_alloc(PoolType{PMM}(), M, length(block), id, unsafe_cleanup!)
+        storage_ptr = unsafe_checked_alloc(
+            PoolType{PMM}(),
+            M,
+            length(block),
+            id,
+            unsafe_cleanup!;
+            canabort = canabort,
+        )
+
+        # Cleanup happened and we now have enough space to fulfill the original request.
+        if storage_ptr === nothing
+            return true
+        end
 
         # Note: Checked allocation will return a null pointer if the requested ID was
         # freed during a cleanup trying to service this allocation.
@@ -702,7 +743,7 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
         # If that's the case, then we don't need to actually bother moving this data block
         # because, well, it's free!
         if isnull(storage_ptr)
-            VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "   Aborting Move of block $(getid(block)) - block has been freed\n");
+            safeprint("   Aborting Move of block $(getid(block)) - block has been freed")
             return nothing
         end
         sibling = unsafe_block(storage_ptr)
@@ -716,7 +757,7 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
         # Since `storage_ptr` is just a pointer, we have to manually inform the copy engine
         # how many threads to use.
         nthreads = min(Threads.nthreads(), 4)
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Copying data for block $(getid(block))");
+        safeprint("    Copying data for block $(getid(block))")
         _memcpy!(storage_ptr, datapointer(block), length(block); nthreads = nthreads)
     end
 
@@ -725,11 +766,11 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager)
     # It's possible the block we just moved has now been queued for deletion.
     # Check that case.
     if isqueued(block)
-        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "   Aborting move of block $(getid(block)) - block was queued during data movement.\n");
+        safeprint("   Aborting move of block $(getid(block)) - block was queued during data movement")
         unsafe_cleanup!(M)
         # Abort operation
         free(PoolType{PMM}(), M, sibling)
-        return nothing
+        return canabort() ? true : nothing
     end
 
     # Update back edges
@@ -791,11 +832,13 @@ function check(manager::CacheManager)
     end
     if manager.size_of_local != size_allocated
         println("Manager and heap DRAM objects size mismatch. Manager sees: $(manager.size_of_local). Heap sees: $size_allocated.")
+        println("    Manager IDS: $(Int.(sort(collect(keys(manager.local_objects)))))")
+        println("    Heap IDS: $(Int.(sort(collect(seen_ids))))")
         passed = false
     end
 
     if !issubset(seen_ids, keys(manager.local_objects))
-        println("Manager sees $(length(manager.local_objectgs)) in DRAM. Heap sees $(length(seen_ids))")
+        println("Manager sees $(length(manager.local_objects)) in DRAM. Heap sees $(length(seen_ids))")
         passed = false
     end
     if !issubset(keys(manager.local_objects), seen_ids)

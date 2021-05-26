@@ -95,9 +95,11 @@ end
 #####
 
 # Bootstrap Utilities
+include("utils/utils.jl")
 include("utils/findnexttree.jl")
 include("utils/threading.jl")
 include("utils/freebuffer.jl")
+alwaysfalse(x...; kw...) = false
 
 include("memkind.jl")
 include("allocators.jl")

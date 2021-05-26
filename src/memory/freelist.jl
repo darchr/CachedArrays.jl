@@ -77,7 +77,11 @@ function remove!(x::Freelist{T}, item::T) where {T}
         item.previous.next = item.next
     end
 
-    isnull(item.next) || (item.next.previous = item.previous)
+    if !isnull(item.next)
+        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Freelist: Next: $(pointer(item) + 8)\n")
+        VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Freelist: Next-Previous: $(pointer(item.next) + 16)\n")
+        item.next.previous = item.previous
+    end
     item.next = item.previous = T()
     return nothing
 end

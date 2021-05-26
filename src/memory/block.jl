@@ -102,11 +102,11 @@ function Base.getproperty(x::Block, name::Symbol)
     elseif name == :size
         # Load the first 8 bytes which encodes the size as a UInt64
         # Mask out the lower 6 bits since those are reserved for other metadata.
-        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & ~UInt(0x3F)
+        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & ~UInt(0x7F)
 
     # Bitmask metadata
     elseif name == :bitmasks
-        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & UInt(0x3F)
+        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & UInt(0x7F)
     elseif name == :free
         return Bool(@getbits(UInt, pointer(x), 0))
     elseif name == :pool
@@ -117,6 +117,8 @@ function Base.getproperty(x::Block, name::Symbol)
         return Bool(@getbits(UInt, pointer(x), 4))
     elseif name == :queued
         return Bool(@getbits(UInt, pointer(x), 5))
+    elseif name == :reclaimed
+        return Bool(@getbits(UInt, pointer(x), 6))
 
     # Bytes 15..8
     elseif name == :next
@@ -141,7 +143,7 @@ end
 function Base.setproperty!(x::Block, name::Symbol, v)
     # Bytes 7..0
     if name == :size
-        sz = convert(UInt64, v) & ~UInt64(0x3f)
+        sz = convert(UInt64, v) & ~UInt64(0x7f)
         unsafe_store!(convert(Ptr{UInt64}, pointer(x)), sz | x.bitmasks)
     # Bit masks
     elseif name == :free
@@ -154,6 +156,8 @@ function Base.setproperty!(x::Block, name::Symbol, v)
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 4)
     elseif name == :queued
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 5)
+    elseif name == :reclaimed
+        @setbits!(UInt8, pointer(x), UInt8(v::Bool), 6)
 
     # bytes 15..8
     elseif name == :next

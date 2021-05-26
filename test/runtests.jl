@@ -24,4 +24,3 @@ include("array/array.jl")
 
 include("integration/corner.jl")
 include("integration/stress.jl")
-
