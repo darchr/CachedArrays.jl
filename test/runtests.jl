@@ -14,6 +14,7 @@ include("allocators.jl")
 include("memory/block.jl")
 include("memory/freelist.jl")
 include("memory/compactheap.jl")
+include("memory/eviction.jl")
 
 include("memcpy.jl")
 

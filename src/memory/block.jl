@@ -22,7 +22,9 @@ struct PoolType{T} end
 #       bit 1-2: Pool ID: 00 if DRAM, 01 if PMM. These bits correspond to the `Pool` enum.
 #       bit 3: dirty bit: 0 if clean, 1 if dirty
 #       bit 4: evicting bit: 0 if normal free, 1 if being evicted
-#       big 5: queued bit: 1 if queued for freeing, 0 otherwise
+#       bit 5: queued bit: 1 if queued for freeing, 0 otherwise
+#       bit 6: orphaned bit: 1 is freed while evicted.
+#
 #
 #    Size can be obtained with `block.size`.
 #    The free state is obtained with `block.free`.
@@ -96,17 +98,23 @@ macro setbits!(typ, ptr, v, x::Integer...)
     end
 end
 
+const LOWER_BIT_MASK = UInt(0x7F)
+
+# Accessing "x.size" automatically clears the lower bits used for masking metadata.
+# Here, we just store the size directly back to clear the lower bits.
+clearbits!(x::Block) = unsafe_store!(convert(Ptr{UInt64}, pointer(x)), x.size)
+
 function Base.getproperty(x::Block, name::Symbol)
     if name == :ptr
         return pointer(x)
     elseif name == :size
         # Load the first 8 bytes which encodes the size as a UInt64
         # Mask out the lower 6 bits since those are reserved for other metadata.
-        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & ~UInt(0x7F)
+        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & ~LOWER_BIT_MASK
 
     # Bitmask metadata
     elseif name == :bitmasks
-        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & UInt(0x7F)
+        return unsafe_load(convert(Ptr{UInt64}, pointer(x))) & LOWER_BIT_MASK
     elseif name == :free
         return Bool(@getbits(UInt, pointer(x), 0))
     elseif name == :pool
@@ -117,7 +125,7 @@ function Base.getproperty(x::Block, name::Symbol)
         return Bool(@getbits(UInt, pointer(x), 4))
     elseif name == :queued
         return Bool(@getbits(UInt, pointer(x), 5))
-    elseif name == :reclaimed
+    elseif name == :orphaned
         return Bool(@getbits(UInt, pointer(x), 6))
 
     # Bytes 15..8
@@ -143,7 +151,7 @@ end
 function Base.setproperty!(x::Block, name::Symbol, v)
     # Bytes 7..0
     if name == :size
-        sz = convert(UInt64, v) & ~UInt64(0x7f)
+        sz = convert(UInt64, v) & ~LOWER_BIT_MASK
         unsafe_store!(convert(Ptr{UInt64}, pointer(x)), sz | x.bitmasks)
     # Bit masks
     elseif name == :free
@@ -156,7 +164,7 @@ function Base.setproperty!(x::Block, name::Symbol, v)
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 4)
     elseif name == :queued
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 5)
-    elseif name == :reclaimed
+    elseif name == :orphaned
         @setbits!(UInt8, pointer(x), UInt8(v::Bool), 6)
 
     # bytes 15..8

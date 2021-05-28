@@ -237,7 +237,7 @@ function unsafe_memcpy!(f, dest::Ptr{UInt8}, src::Ptr{UInt8}, len)
     end
 
     # Normal MEMCPY the rest.
-    unsafe_copyto!(dest, src, len)
+    iszero(len) || unsafe_copyto!(dest, src, len)
     return nothing
 end
 

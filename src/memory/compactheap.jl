@@ -239,14 +239,10 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     block === nothing && return nothing
 
     # Setup the default state for the block
-    block.free = false
-    block.evicting = false
-    block.queued = false
-    block.reclaimed = false
+    clearbits!(block)
     block.id = id
     block.pool = heap.pool
 
-    safeprint("[HEAP] Allocated $id")
     ptr = pointer(block) + headersize()
     return ptr
 end
@@ -263,11 +259,9 @@ end
 function free(heap::CompactHeap, ptr::Ptr{Nothing})
     block = unsafe_block(ptr)
     if block.evicting == true
-        safeprint("[HEAP] Reclaiming $(getid(block))")
-        block.reclaimed = true
+        block.orphaned = true
         return nothing
     end
-    safeprint("[HEAP] Freeing $(getid(block))")
     block.free = true
     putback!(heap, block)
     return nothing
@@ -276,10 +270,6 @@ end
 #####
 ##### Eviction API
 #####
-
-# We don't have buddy constraints here - so as long as the request is less than the size
-# of the entire heap, we can allocate it.
-canallocfrom(heap::CompactHeap, block::Block, sz) = (sz < sizeof(heap))
 
 function unsafe_free!(f, block::Block)
     @check !isfree(block)
@@ -290,11 +280,7 @@ function unsafe_free!(f, block::Block)
     block.evicting = true
 
     # Do the callback on the block and then mark the blocked as freed.
-    abort = f(block)
-
-    # Don't mark the block as free.
-    # We still own it and all will be freed after eviction.
-    return abort
+    return f(block)
 end
 
 function evict!(f::F, heap, block) where {F}
@@ -330,12 +316,12 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
         abort = evict!(cb, heap, current)
 
         # Check for early abort
-        if (abort !== nothing) && (abort == true)
+        if (abort === true)
             # Cleanup eviction status
             current.evicting = false
 
             # Aborted on the first block.
-            # If this block was NOT reclaimed as a side-effect of the eviction callback,
+            # If this block was NOT orphaned as a side-effect of the eviction callback,
             # then we need to rollback the current block to the last successfully
             # processed block.
             #
@@ -343,7 +329,7 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
             # put back on the heap.
             #
             # As a result, we need to include it in the freed frontier.
-            if current.reclaimed
+            if current.orphaned
                 sizefreed += current.size
             else
                 iszero(sizefreed) && return nothing
@@ -351,7 +337,7 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
             end
 
             aborted = true
-            return break
+            @goto cleanup
         end
         sizefreed += current.size
 
@@ -363,28 +349,26 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     end
 
     # Walk backwards if we have to in order to free enough space.
-    if !aborted
-        while sizefreed < sz
-            block = walkprevious(heap, block)
-            abort = evict!(cb, heap, block)
-            if (abort !== nothing) && (abort == true)
-                block.evicting = false
-                if !block.reclaimed
-                    # Roll back block to last successful eviction.
-                    block = walknext(heap, block)
-                else
-                    sizefreed += block.size
-                end
-                safeprint("Aborting eviction! [2]"; force = true)
-                break
+    while sizefreed < sz
+        block = walkprevious(heap, block)
+        abort = evict!(cb, heap, block)
+        if (abort === true)
+            block.evicting = false
+            if !block.orphaned
+                # Roll back block to last successful eviction.
+                block = walknext(heap, block)
+            else
+                sizefreed += block.size
             end
-            sizefreed += block.size
+            @goto cleanup
         end
+        sizefreed += block.size
     end
 
     # Resize our block and put it back in the heap.
+    @label cleanup
     block.free = true
-    block.reclaimed = false
+    block.orphaned = false
     block.size = sizefreed
     putback!(heap, block)
     heap.canalloc = true
