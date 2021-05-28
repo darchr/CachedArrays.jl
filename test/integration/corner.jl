@@ -40,7 +40,7 @@
         # Make sure that it actually resides in the remote heap and that it doesn't
         # have any siblings in the local heap for some reason.
         CachedArrays.evict!(_a)
-        @test CachedArrays.getpool(CachedArrays.metadata(_a)) == CachedArrays.PMM
+        @test CachedArrays.getpool(CachedArrays.metadata(_a)) == CachedArrays.Remote
         @test CachedArrays.getsibling(CachedArrays.metadata(_a)) === nothing
 
         ### Unsafe operation.

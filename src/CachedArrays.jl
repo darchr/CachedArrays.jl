@@ -7,11 +7,10 @@ import Base: @lock
 
 # stdlib
 import Dates
+import Mmap
 import Random
 
 # Dependencies
-import ArrayInterface: ArrayInterface
-import VectorizationBase
 import DataStructures
 import SIMD
 import MacroTools
@@ -22,16 +21,6 @@ import TimerOutputs
 const DEBUG = true
 const VERBOSE = false
 const ENABLETIMING = false
-
-# Check ALL array updates for correctness.
-# const PEDANTIC = false      # TODO: Currently Broken
-
-# Flag to indicate if we're in 2LM.
-# If we are, configure the system to error if we ever try to allocate remote memory.
-_boolparse(x::Bool) = x
-_boolparse(x::String) = parse(Bool, x)
-
-const IS_2LM = false
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
@@ -78,18 +67,6 @@ end
 # This turns out to be surprisingly useful ...
 donothing(x...) = nothing
 
-# Low level timing macro
-macro timens(name, expr)
-    return quote
-        before = time_ns()
-        res = $(esc(expr))
-        after = time_ns()
-        println($name, ": ", Int(after - before), " ns")
-        res
-    end
-end
-
-
 #####
 ##### includes
 #####
@@ -101,7 +78,6 @@ include("utils/threading.jl")
 include("utils/freebuffer.jl")
 alwaysfalse(x...; kw...) = false
 
-include("memkind.jl")
 include("allocators.jl")
 include("metadata.jl")
 

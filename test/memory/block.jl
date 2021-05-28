@@ -25,7 +25,7 @@
     # Make sure that our configuration code for setting lower order bits doesn't affect
     # the bits it's not supposed to.
     freeness = (true, false)
-    pools = (CachedArrays.DRAM, CachedArrays.PMM)
+    pools = (CachedArrays.Local, CachedArrays.Remote)
     sizes = (2^20, 2^30, 4096)
     orders = [
         (:size, :free, :pool),

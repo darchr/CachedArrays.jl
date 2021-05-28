@@ -84,7 +84,7 @@ _isaligned(x::Ptr) = _isaligned(convert(Int, x))
     memcpy!(dest::AbstractArray, src::AbstractArray, [toremote = false]; [forcesingle])
 
 Copy the contents from `src` to `dest` using non-temporal AVX store instructions.
-Pass `toremote = true` if `dest` lives in PMM for better performance.
+Pass `toremote = true` if `dest` lives in Remote for better performance.
 Set keyword `forcesingle = true` to force only one thread to do the copy operations.
 
 LIMITATIONS
@@ -97,12 +97,12 @@ function memcpy!(dest::AbstractArray{T}, src::AbstractArray{T}; kw...) where {T}
 end
 
 # Specialize `memcpy` for CachedArrays.
-# TODO: Figure out maximum number of threads for copying from PMM to PMM
+# TODO: Figure out maximum number of threads for copying from Remote to Remote
 function memcpy!(dest::CachedArray{T}, src::AbstractArray{T}; nthreads = nothing) where {T}
     # Perform standard thread chosing logic
     if nthreads === nothing
         maxthreads = Threads.nthreads()
-        nthreads = pool(dest) == PMM ? min(maxthreads, 4) : maxthreads
+        nthreads = pool(dest) == Remote ? min(maxthreads, 4) : maxthreads
     end
 
     return _memcpy!(dest, src; nthreads = nthreads)

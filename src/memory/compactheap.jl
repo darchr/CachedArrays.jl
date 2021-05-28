@@ -18,6 +18,7 @@ mutable struct CompactHeap{T} <: AbstractHeap
     minallocation::PowerOfTwo
 
     # Where is and what kind of memory do we have?
+    basehost::Any
     base::Ptr{Nothing}
     len::Int
     pool::Pool
@@ -28,10 +29,13 @@ mutable struct CompactHeap{T} <: AbstractHeap
     canalloc::Bool
 end
 
+topointer(ptr::Ptr) = ptr
+topointer(A::AbstractArray) = convert(Ptr{Nothing}, pointer(A))
+
 function CompactHeap(
     allocator::T,
     sz;
-    pool = DRAM,
+    pool = Local,
     # Power of two
     minallocation = PowerOfTwo(21),
 ) where {T}
@@ -41,15 +45,27 @@ function CompactHeap(
     sz = (sz >> minallocation.val) << minallocation.val
 
     # Allocate the memory managed by this heap
-    base = allocate(allocator, sz)
+    basehost = allocate(allocator, sz)
+    base = topointer(basehost)
+
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
     freelists = [Freelist{Block}() for _ = 1:numbins]
 
-    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists, true)
+    heap = CompactHeap{T}(
+        allocator,
+        minallocation,
+        basehost,
+        base,
+        sz,
+        pool,
+        status,
+        freelists,
+        true,
+    )
 
     finalizer(heap) do x
-        free(x.allocator, x.base)
+        free(x.allocator, x.basehost)
     end
 
     # Add an entry for the biggest freelist.

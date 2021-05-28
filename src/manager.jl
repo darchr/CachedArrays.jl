@@ -1,4 +1,3 @@
-const PMM_ALLOCATOR_TYPE = IS_2LM ? AlignedAllocator : MemKindAllocator
 _datapointer(x) = convert(Ptr{Ptr{Nothing}}, datapointer(x))
 
 mutable struct Region{T}
@@ -53,7 +52,7 @@ mutable struct CacheManager{C}
 
     # local datastructures
     policy::C
-    pmm_heap::CompactHeap{PMM_ALLOCATOR_TYPE}
+    pmm_heap::CompactHeap{MmapAllocator}
     dram_heap::CompactHeap{AlignedAllocator}
 
     # Synchronize access
@@ -81,12 +80,7 @@ function CacheManager(
 )
     # If we're in 2LM, pass a nullptr.
     # MemKindAllocator gets swapped to something that throws an error if called.
-    if IS_2LM
-        pmm_allocator = AlignedAllocator()
-    else
-        # For now, pass 0 - which essentially allows unlimited memory
-        pmm_allocator = MemKindAllocator(MemKind.create_pmem(path, 0))
-    end
+    remote_allocator = MmapAllocator(path)
 
     local_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
     size_of_local = 0
@@ -95,13 +89,17 @@ function CacheManager(
     size_of_remote = 0
 
     # Initialize Heaps
-    pmm_heap =
-        CompactHeap(pmm_allocator, remotesize; pool = PMM, minallocation = minallocation)
+    pmm_heap = CompactHeap(
+        remote_allocator,
+        remotesize;
+        pool = Remote,
+        minallocation = minallocation,
+    )
 
     dram_heap = CompactHeap(
         AlignedAllocator(),
         localsize;
-        pool = DRAM,
+        pool = Local,
         minallocation = minallocation,
     )
 
@@ -144,8 +142,8 @@ setdirty!(A, M::CacheManager, flag) = setdirty!(metadata(A), M, flag)
 
 function setdirty!(block::Block, M::CacheManager, flag)
     # Only need to worry about updating the state of the block and the policy if
-    # this particular object lives in DRAM
-    if getpool(block) == DRAM
+    # this particular object lives in Local
+    if getpool(block) == Local
         setdirty!(block, flag)
         # TODO: Enforce synchronization.
         setdirty!(M.policy, block, flag)
@@ -171,21 +169,21 @@ pool(A) = getpool(metadata(A))
 function prefetch!(A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        moveto!(PoolType{DRAM}(), A, _manager; kw...)
+        moveto!(PoolType{Local}(), A, _manager; kw...)
     end
 end
 
 function shallowfetch!(A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        moveto!(PoolType{DRAM}(), A, manager(A); kw..., write_before_read = true)
+        moveto!(PoolType{Local}(), A, manager(A); kw..., write_before_read = true)
     end
 end
 
 function evict!(A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        moveto!(PoolType{PMM}(), A, manager(A); kw...)
+        moveto!(PoolType{Remote}(), A, manager(A); kw...)
     end
 end
 
@@ -225,11 +223,11 @@ remotesize(manager::CacheManager) = manager.size_of_remote
 ##### API for adding and removing items from the
 #####
 
-getobjects(::PoolType{DRAM}, M::CacheManager) = M.local_objects
-getobjects(::PoolType{PMM}, M::CacheManager) = M.remote_objects
+getobjects(::PoolType{Local}, M::CacheManager) = M.local_objects
+getobjects(::PoolType{Remote}, M::CacheManager) = M.remote_objects
 
-adjust_size!(::PoolType{DRAM}, M::CacheManager, x) = M.size_of_local += x
-adjust_size!(::PoolType{PMM}, M::CacheManager, x) = M.size_of_remote += x
+adjust_size!(::PoolType{Local}, M::CacheManager, x) = M.size_of_local += x
+adjust_size!(::PoolType{Remote}, M::CacheManager, x) = M.size_of_remote += x
 
 function register!(
     manager::CacheManager,
@@ -241,10 +239,10 @@ function register!(
         # Register with the appropriate pool.
         # Statically dispatch to avoid a potential allocation.
         p = block.pool
-        if p == DRAM
-            unsafe_register!(PoolType{DRAM}(), manager, block, datapointer)
-        elseif p == PMM
-            unsafe_register!(PoolType{PMM}(), manager, block, datapointer)
+        if p == Local
+            unsafe_register!(PoolType{Local}(), manager, block, datapointer)
+        elseif p == Remote
+            unsafe_register!(PoolType{Remote}(), manager, block, datapointer)
         else
             error("Unknown Pool: $p")
         end
@@ -261,8 +259,8 @@ function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr)
 
     # Add to data structures
     #
-    # If adding to DRAM, also add this block to the eviction policy
-    if T == DRAM
+    # If adding to Local, also add this block to the eviction policy
+    if T == Local
         push!(M.policy, block)
     end
     objects[id] = convert(Ptr{Ptr{Nothing}}, ptr)
@@ -270,7 +268,7 @@ function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr)
     return nothing
 end
 
-update!(::PoolType{DRAM}, M::CacheManager, A) = update!(M.policy, metadata(A))
+update!(::PoolType{Local}, M::CacheManager, A) = update!(M.policy, metadata(A))
 
 # Top level entry points
 function unregister!(pool, M::CacheManager, A)
@@ -286,8 +284,8 @@ function unsafe_unregister!(pool::PoolType{T}, M::CacheManager, block::Block) wh
     # Just remove backedges
     delete!(objects, id)
 
-    # If we're unregistering from DRAM, also remove this block from the eviction policy.
-    if T == DRAM
+    # If we're unregistering from Local, also remove this block from the eviction policy.
+    if T == Local
         in(block, M.policy) && delete!(M.policy, block)
     end
     adjust_size!(pool, M, -length(block))
@@ -331,31 +329,31 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
         for block in cleanlist
             @check !isfree(block) || block.evicting
 
-            # If this block is in PMM, make sure it doesn't have a sibling - otherwise, that would
+            # If this block is in Remote, make sure it doesn't have a sibling - otherwise, that would
             # be an error.
             id == getid(block) && (id_cleaned = true)
             pool = getpool(block)
-            if pool == PMM
+            if pool == Remote
                 @check getsibling(block) === nothing
 
-                # Deregister from PMM. If there are zero remaining references,
+                # Deregister from Remote. If there are zero remaining references,
                 # then we free the block
-                unsafe_unregister!(PoolType{PMM}(), M, block)
-                free(PoolType{PMM}(), M, block)
-            elseif pool == DRAM
-                unsafe_unregister!(PoolType{DRAM}(), M, block)
+                unsafe_unregister!(PoolType{Remote}(), M, block)
+                free(PoolType{Remote}(), M, block)
+            elseif pool == Local
+                unsafe_unregister!(PoolType{Local}(), M, block)
 
                 # Does this block have a sibling?
                 sibling = getsibling(block)
                 if sibling !== nothing
                     @check getid(block) == getid(sibling)
-                    @check getpool(sibling) == PMM
+                    @check getpool(sibling) == Remote
 
                     # use `unsafe_unregister!` to completely remove this block.
-                    unsafe_unregister!(PoolType{PMM}(), M, block)
-                    free(PoolType{PMM}(), M, sibling)
+                    unsafe_unregister!(PoolType{Remote}(), M, block)
+                    free(PoolType{Remote}(), M, sibling)
                 end
-                free(PoolType{DRAM}(), M, block)
+                free(PoolType{Local}(), M, block)
             end
         end
         empty!(cleanlist)
@@ -376,23 +374,25 @@ end
 ##### `alloc` entry point
 #####
 
-# Try to allocate from DRAM first.
-# Then, try to allocate from PMM
+# Try to allocate from Local first.
+# Then, try to allocate from Remote
 function alloc(manager::CacheManager, bytes::Int, id::UInt = getid(manager))
     ptr = @spinlock alloc_lock(manager) unsafe_alloc(manager, bytes, id)
     return Region(ptr, manager)
 end
 
 function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
-    ptr = unsafe_alloc(PoolType{DRAM}(), manager, bytes, id)
+    ptr = unsafe_alloc(PoolType{Local}(), manager, bytes, id)
     ptr === nothing || return ptr
 
-    # No free space. Try to allocate from PMM
-    return unsafe_alloc(PoolType{PMM}(), manager, bytes, id)
+    # No free space. Try to allocate from Remote
+    return unsafe_alloc(PoolType{Remote}(), manager, bytes, id)
 end
 
+const TIMES = UInt64[]
+
 function unsafe_alloc(
-    ::PoolType{DRAM},
+    ::PoolType{Local},
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager),
@@ -401,8 +401,10 @@ function unsafe_alloc(
 ) where {F,G}
     @requires alloc_lock(manager)
 
+    start = time_ns()
     heap = manager.dram_heap
     if candrain(manager.freebuffer) && cleanup_function(manager, id)
+        push!(TIMES, time_ns() - start)
         return Ptr{Nothing}()
     end
 
@@ -431,11 +433,12 @@ function unsafe_alloc(
         ptr = alloc(manager.dram_heap, bytes, id)
     end
 
+    push!(TIMES, time_ns() - start)
     return ptr
 end
 
 function unsafe_alloc(
-    ::PoolType{PMM},
+    ::PoolType{Remote},
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager),
@@ -469,10 +472,10 @@ free_convert(x::Ptr) = convert(Ptr{Nothing}, x)
 free_convert(x::Block) = _datapointer(x)
 
 free(pool::PoolType, manager::CacheManager, x) = free(pool, manager, free_convert(x))
-function free(::PoolType{DRAM}, manager::CacheManager, ptr::Ptr{Nothing})
+function free(::PoolType{Local}, manager::CacheManager, ptr::Ptr{Nothing})
     return free(manager.dram_heap, ptr)
 end
-function free(::PoolType{PMM}, manager::CacheManager, ptr::Ptr{Nothing})
+function free(::PoolType{Remote}, manager::CacheManager, ptr::Ptr{Nothing})
     return free(manager.pmm_heap, ptr)
 end
 
@@ -485,7 +488,7 @@ function unsafe_eviction!(manager::CacheManager, bytes; canabort::F = alwaysfals
     @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
     # The eviction callback
-    cb = block -> moveto!(PoolType{PMM}(), block, manager; canabort)
+    cb = block -> moveto!(PoolType{Remote}(), block, manager; canabort)
 
     isempty(manager.policy) && return nothing
     token = fullpop!(manager.policy)
@@ -514,7 +517,7 @@ end
 moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
 
 function moveto!(
-    dram::PoolType{DRAM},
+    dram::PoolType{Local},
     block::Block,
     M::CacheManager;
     dirty = true,
@@ -525,18 +528,18 @@ function moveto!(
     id = getid(block)
 
     # If the data is already local, mark a usage and return.
-    if getpool(block) == DRAM
+    if getpool(block) == Local
         # TODO: Fix
-        #update!(PoolType{DRAM}(), M, A)
+        #update!(PoolType{Local}(), M, A)
         return nothing
     end
 
-    # If this block is NOT in DRAM, then it shouldn't have a sibling.
+    # If this block is NOT in Local, then it shouldn't have a sibling.
     @check getsibling(block) === nothing
 
     # Otherwise, we need to allocate some local data for it.
     storage_ptr = unsafe_alloc(
-        PoolType{DRAM}(),
+        PoolType{Local}(),
         M,
         length(block),
         id,
@@ -544,7 +547,7 @@ function moveto!(
         unsafe_eviction!,
     )
 
-    # Null pointer returned - corresponding block in PMM has been freed.
+    # Null pointer returned - corresponding block in Remote has been freed.
     # No need to finish the move.
     if isnull(storage_ptr)
         return nothing
@@ -565,7 +568,7 @@ function moveto!(
 
     # Check if this block has multiple watchers.
     # If so, update all references to this block.
-    pmm = PoolType{PMM}()
+    pmm = PoolType{Remote}()
     ptr = getobjects(pmm, M)[id]
     unsafe_store!(ptr, storage_ptr)
     unsafe_register!(dram, M, newblock, ptr)
@@ -578,13 +581,18 @@ function moveto!(
     return nothing
 end
 
-function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager; canabort = alwaysfalse)
+function moveto!(
+    pool::PoolType{Remote},
+    block::Block,
+    M::CacheManager;
+    canabort = alwaysfalse,
+)
     @requires alloc_lock(M) remove_lock(M.freebuffer)
 
-    dram = PoolType{DRAM}()
+    dram = PoolType{Local}()
     id = getid(block)
-    # If already in PMM, do nothing
-    getpool(block) == PMM && return nothing
+    # If already in Remote, do nothing
+    getpool(block) == Remote && return nothing
     sibling = getsibling(block)
 
     # If this block has a sibling and it is clean, we can elide write back.
@@ -592,7 +600,7 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager; canabort = 
     createstorage = (sibling === nothing)
     if createstorage
         storage_ptr = unsafe_alloc(
-            PoolType{PMM}(),
+            PoolType{Remote}(),
             M,
             length(block),
             id,
@@ -634,7 +642,7 @@ function moveto!(pool::PoolType{PMM}, block::Block, M::CacheManager; canabort = 
     if isqueued(block)
         unsafe_cleanup!(M)
         # Abort operation
-        free(PoolType{PMM}(), M, sibling)
+        free(PoolType{Remote}(), M, sibling)
         return canabort() ? true : nothing
     end
 
@@ -659,12 +667,12 @@ end
 function check(manager::CacheManager)
     passed = true
     if !check(manager.pmm_heap)
-        println("PMM Heap failed!")
+        println("Remote Heap failed!")
         passed = false
     end
 
     if !check(manager.dram_heap)
-        println("DRAM Heap failed!")
+        println("Local Heap failed!")
         passed = false
     end
 
@@ -679,7 +687,7 @@ function check(manager::CacheManager)
         end
     end
     if manager.size_of_remote != size_allocated
-        println("Manager and heap PMM objects size mismatch. Manager sees: $(manager.size_of_remote). Heap sees: $size_allocated.")
+        println("Manager and heap Remote objects size mismatch. Manager sees: $(manager.size_of_remote). Heap sees: $size_allocated.")
         passed = false
     end
 
@@ -696,18 +704,18 @@ function check(manager::CacheManager)
         end
     end
     if manager.size_of_local != size_allocated
-        println("Manager and heap DRAM objects size mismatch. Manager sees: $(manager.size_of_local). Heap sees: $size_allocated.")
+        println("Manager and heap Local objects size mismatch. Manager sees: $(manager.size_of_local). Heap sees: $size_allocated.")
         println("    Manager IDS: $(Int.(sort(collect(keys(manager.local_objects)))))")
         println("    Heap IDS: $(Int.(sort(collect(seen_ids))))")
         passed = false
     end
 
     if !issubset(seen_ids, keys(manager.local_objects))
-        println("Manager sees $(length(manager.local_objects)) in DRAM. Heap sees $(length(seen_ids))")
+        println("Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))")
         passed = false
     end
     if !issubset(keys(manager.local_objects), seen_ids)
-        println("Manager sees $(length(manager.local_objects)) in DRAM. Heap sees $(length(seen_ids))")
+        println("Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))")
         passed = false
     end
 

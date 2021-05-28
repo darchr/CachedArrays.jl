@@ -221,7 +221,7 @@ function tests_1d(totalsize, arraysize, flushpercent, eviction_policy)
         # Round up for headroom
         localsize = round(Int, totalsize * 1.5)
         remotesize = 2^24
-    # Size local mamory to be a little smaller than the DRAM cache to allow for other
+    # Size local mamory to be a little smaller than the Local cache to allow for other
     # program activities that don't belong to our heap.
     else
         localsize = DEBUG ? totalsize >> 1 : 180_000_000_000
@@ -335,7 +335,7 @@ function alloc_tests(totalsize, arraysize, flushpercent, eviction_policy)
         # Round up for headroom
         localsize = round(Int, totalsize * 1.5)
         remotesize = 4096
-    # Size local mamory to be a little smaller than the DRAM cache to allow for other
+    # Size local mamory to be a little smaller than the Local cache to allow for other
     # program activities that don't belong to our heap.
     else
         localsize = DEBUG ? totalsize >> 1 : 180_000_000_000

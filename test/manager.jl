@@ -1,6 +1,6 @@
 @testset "Testing Operation of Cache Manager" begin
-    DRAM = CachedArrays.DRAM
-    PMM = CachedArrays.PMM
+    Local = CachedArrays.Local
+    Remote = CachedArrays.Remote
     PoolType = CachedArrays.PoolType
 
     GC.gc(true)
@@ -18,11 +18,11 @@
     A = CachedArray{UInt8}(undef, manager, (500000,))
     # Actual allocation should be within 2^minallocation of the actual size of A
     @test CachedArrays.inlocal(manager, A)
-    @test CachedArrays.pool(A) == DRAM
+    @test CachedArrays.pool(A) == Local
     # TODO: Acquire Lock
     # if CachedArrays.DEBUG
     #     @test_throws AssertionError CachedArrays.unsafe_register!(
-    #         PoolType{DRAM}(),
+    #         PoolType{Local}(),
     #         manager,
     #         CachedArrays.metadata(A),
     #         CachedArrays._datapointer(A),
@@ -34,8 +34,8 @@
     @test CachedArrays.inlocal(manager, B)
 
     @test isempty(manager.remote_objects) == true
-    @test CachedArrays.pool(A) == DRAM
-    @test CachedArrays.pool(B) == DRAM
+    @test CachedArrays.pool(A) == Local
+    @test CachedArrays.pool(B) == Local
 
     # When we insert C, A should be evicted.
     C = CachedArray{UInt8}(undef, manager, (500000,))
@@ -45,13 +45,13 @@
     @test !CachedArrays.inlocal(manager, A)
     @test CachedArrays.inremote(manager, A)
 
-    @test CachedArrays.pool(A) == PMM
-    @test CachedArrays.pool(B) == DRAM
-    @test CachedArrays.pool(C) == DRAM
+    @test CachedArrays.pool(A) == Remote
+    @test CachedArrays.pool(B) == Local
+    @test CachedArrays.pool(C) == Local
     # TODO: Acquire Lock
     # if CachedArrays.DEBUG
     #     @test_throws AssertionError CachedArrays.unsafe_register!(
-    #         PoolType{PMM}(),
+    #         PoolType{Remote}(),
     #         manager,
     #         CachedArrays.metadata(A),
     #         CachedArrays._datapointer(A),
@@ -70,29 +70,29 @@
     @test CachedArrays.inremote(manager, B)
     @test !CachedArrays.inremote(manager, C)
 
-    @test CachedArrays.pool(A) == DRAM
-    @test CachedArrays.pool(B) == PMM
-    @test CachedArrays.pool(C) == DRAM
+    @test CachedArrays.pool(A) == Local
+    @test CachedArrays.pool(B) == Remote
+    @test CachedArrays.pool(C) == Local
 
     # Now - test that locking movement works correctly.
-    # If we disable movement and then allocate a new array, it should be allocated in PMM
+    # If we disable movement and then allocate a new array, it should be allocated in Remote
     CachedArrays.disable_movement!(manager)
     D = similar(B)
 
-    @test CachedArrays.pool(A) == DRAM
-    @test CachedArrays.pool(B) == PMM
-    @test CachedArrays.pool(C) == DRAM
-    @test CachedArrays.pool(D) == PMM
+    @test CachedArrays.pool(A) == Local
+    @test CachedArrays.pool(B) == Remote
+    @test CachedArrays.pool(C) == Local
+    @test CachedArrays.pool(D) == Remote
 
-    # If we renable movement - then a new allocation should happen in DRAM with an evicion.
+    # If we renable movement - then a new allocation should happen in Local with an evicion.
     CachedArrays.enable_movement!(manager)
     E = similar(B)
 
-    @test CachedArrays.pool(A) == DRAM
-    @test CachedArrays.pool(B) == PMM
-    @test CachedArrays.pool(C) == PMM
-    @test CachedArrays.pool(D) == PMM
-    @test CachedArrays.pool(E) == DRAM
+    @test CachedArrays.pool(A) == Local
+    @test CachedArrays.pool(B) == Remote
+    @test CachedArrays.pool(C) == Remote
+    @test CachedArrays.pool(D) == Remote
+    @test CachedArrays.pool(E) == Local
 end
 
 @testset "Testing Manager Cleanup" begin

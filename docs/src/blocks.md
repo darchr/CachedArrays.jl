@@ -14,7 +14,7 @@ The meaning of these bits is summarized here.
 | Name     | Bits | Description |
 | -------- | ---- | :---------- |
 | Free     | 0    | 1 if the memory segment described by thie block is free. 0 if this block is not free |
-| Pool ID  | 1-2  | Indicates the memory pool this block belongs to. `00 -> DRAM`, `01 -> PMM`, `10,11 -> Reserved`. |
+| Pool ID  | 1-2  | Indicates the memory pool this block belongs to. `00 -> Local`, `01 -> Remote`, `10,11 -> Reserved`. |
 | Dirty    | 3    | 1 if `data` segment is dirty, 0 if `data` is clean. This should be set/cleared by higher levels in the cache management system. |
 | Evicting | 4    | This bit is used when a block is freed. Under normal freeing, this bit is set to 0 and this block is returned to the heap as normal (i.e., potentially merged with neighboring blocks, freelists updated etc.). However, if a block is being freed as a result of a forced eviction, we want to bypass the normal freeing logic and just mark the block as free. Setting this bit to 1 achieves that. |
 
@@ -43,5 +43,5 @@ The following fields are valid while the block is free.
 | Name  | Bytes | Description |
 | ----- | ----- | :---------- |
 | ID    | 8-15  | Unique ID assigned to this block by the cache manager. This is used to associate blocks in different memory pools. Blocks with the same ID are called `siblings` and represent the same array. |
-| Sibling | 16-23 | Pointer to a sibling block for the current block. If a block does not have a sibling, this will be null. Siblings are created, for example, when a block is fetched from `PMM` to `DRAM`. In this scenario, a block is allocated in `DRAM` and data is copied from the `PMM` block into the `DRAM` block. The blocks are then configured to be eachother's siblings. Thus, if the `DRAM` block is modified, the `PMM` block can be updated. |
+| Sibling | 16-23 | Pointer to a sibling block for the current block. If a block does not have a sibling, this will be null. Siblings are created, for example, when a block is fetched from `Remote` to `Local`. In this scenario, a block is allocated in `Local` and data is copied from the `Remote` block into the `Local` block. The blocks are then configured to be eachother's siblings. Thus, if the `Local` block is modified, the `Remote` block can be updated. |
 

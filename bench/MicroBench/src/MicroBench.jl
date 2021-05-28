@@ -23,7 +23,7 @@ using DataStructures
 using ProgressMeter
 using StructArrays
 
-# debug mode enables much smaller kernels that don't exceed the size of the DRAM
+# debug mode enables much smaller kernels that don't exceed the size of the Local
 const DEBUG = false
 
 function __init__()

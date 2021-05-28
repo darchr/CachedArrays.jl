@@ -2,7 +2,7 @@
 ##### This is the header for a region of memory in the heap.
 #####
 
-@enum Pool::UInt DRAM=0 PMM=1
+@enum Pool::UInt Local=0 Remote=1
 struct PoolType{T} end
 
 # It is imlemented as just a pointer, which points to the beginning of a region of memory.
@@ -19,7 +19,7 @@ struct PoolType{T} end
 #       TODO: We can actually do better since sizes will be multiples of MIN_ALLOCATION.
 #
 #       bit 0: 1 if the block is free, 0 if it is not free.
-#       bit 1-2: Pool ID: 00 if DRAM, 01 if PMM. These bits correspond to the `Pool` enum.
+#       bit 1-2: Pool ID: 00 if Local, 01 if Remote. These bits correspond to the `Pool` enum.
 #       bit 3: dirty bit: 0 if clean, 1 if dirty
 #       bit 4: evicting bit: 0 if normal free, 1 if being evicted
 #       bit 5: queued bit: 1 if queued for freeing, 0 otherwise

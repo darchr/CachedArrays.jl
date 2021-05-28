@@ -7,8 +7,6 @@ using Distributions
 import ProgressMeter
 
 include("utils/findnexttree.jl")
-
-include("memkind.jl")
 include("allocators.jl")
 
 include("memory/block.jl")

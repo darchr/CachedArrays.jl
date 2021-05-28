@@ -1,6 +1,6 @@
 function gctest(manager)
-    DRAM = CachedArrays.DRAM
-    PMM = CachedArrays.PMM
+    Local = CachedArrays.Local
+    Remote = CachedArrays.Remote
 
     len = 1024
     B = rand(Float32, len)
@@ -12,7 +12,7 @@ function gctest(manager)
     @test A == B
     @test length(A) == len
 
-    @test CachedArrays.pool(A) == DRAM
+    @test CachedArrays.pool(A) == Local
 
     # Make sure the global manager is updated correctly.
     @test CachedArrays.inlocal(manager, A)
@@ -22,7 +22,7 @@ function gctest(manager)
     CachedArrays.evict!(A)
 
     # Make sure our query functions work
-    @test CachedArrays.pool(A) == PMM
+    @test CachedArrays.pool(A) == Remote
     @test A == B
 
     # Make sure the cache gets updated.
@@ -32,7 +32,7 @@ function gctest(manager)
 
     # Now prefetch the array back
     CachedArrays.prefetch!(A)
-    @test CachedArrays.pool(A) == DRAM
+    @test CachedArrays.pool(A) == Local
     @test A == B
 
     # The cache maanger should now have this array stored at both locations.

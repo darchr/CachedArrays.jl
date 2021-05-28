@@ -21,7 +21,7 @@ Default settings can be found in `env_1lm.sh` and `env_2lm.sh`
 
 * `JULIA_IS_2LM`: Boolean - set to `true` if we're in 2LM mode
 * `JULIA_MICROBENCH_ARRAYSIZE`: Int - The aggregate size of the main array to test.
-    In general, it's nice to be able to configure this to be various multiples of the DRAM
+    n general, it's nice to be able to configure this to be various multiples of the DRAM
     cache size.
 * `JULIA_NUM_THREADS`: Number of threads to use
 * `JULIA_PMEM_PATH`: Path to where PMMs are mounted

@@ -2,28 +2,31 @@
 abstract type AbstractAllocator end
 
 #####
-##### Allocate through LibMemKind
+##### Memory Map Allocator
 #####
 
-struct MemKindAllocator <: AbstractAllocator
-    kind::MemKind.Kind
+struct MmapAllocator <: AbstractAllocator
+    dir::String
 end
 
-# Determine what to do based on environment variables.
-# This is a little hacky ... but should work for now.
-#
-# in 2LM, we defer to `AlignedAllocator` to bootstrap the remote heap.
-# However, we extend the `alloc` method for the heap to throw an error in 2LM.
-@static if IS_2LM
-    allocate(A::MemKindAllocator, sz) = allocate(AlignedAllocator(), sz)
-    free(A::MemKindAllocator, ptr::Ptr{Nothing}) = free(AlignedAllocator(), ptr)
-else
-    allocate(A::MemKindAllocator, sz) = MemKind.malloc(A.kind, sz)
-    free(A::MemKindAllocator, ptr::Ptr{Nothing}) = MemKind.free(A.kind, ptr)
-end # @static if
+function allocate(allocator::MmapAllocator, sz)
+    name = tempname(allocator.dir; cleanup = false)
+    A = open(name; create = true, read = true, write = true) do io
+        Mmap.mmap(io, Vector{UInt8}, sz)
+    end
+    # Remove the file - OS will keep it around as long as our process is running and the
+    # cleanup once the process terminates.
+    rm(name)
+    return A
+end
+
+# Let the Mmap finalizer do its thing
+function free(::MmapAllocator, _)
+    return nothing
+end
 
 #####
-##### Allocate through LibC
+##### DRAM Allocator
 #####
 
 struct AlignedAllocator <: AbstractAllocator end
@@ -44,4 +47,3 @@ function aligned_alloc(sz::Integer; alignment = UInt(64))
     @assert ret == 0
     return ptr_ref[]
 end
-

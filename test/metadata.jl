@@ -5,7 +5,7 @@ mutable struct TestMeta <: CachedArrays.AbstractMetadata
     sibling::Union{Nothing,TestMeta}
 end
 
-TestMeta(id) = TestMeta(false, id, CachedArrays.DRAM, nothing)
+TestMeta(id) = TestMeta(false, id, CachedArrays.Local, nothing)
 
 # Implement the API
 CachedArrays.setdirty!(T::TestMeta, flag) = (T.dirty = flag)
@@ -34,7 +34,7 @@ CachedArrays.metadata(x::ArrayWrapper, ::Type{TestMeta})::TestMeta = TRACKER[x]
     @test CachedArrays.isdirty(A) == true
 
     @test CachedArrays.getid(A) == zero(UInt)
-    @test CachedArrays.getpool(A) == CachedArrays.DRAM
+    @test CachedArrays.getpool(A) == CachedArrays.Local
     @test isnothing(CachedArrays.getsibling(A))
 
     # Make another array and make a sibling for the array.
