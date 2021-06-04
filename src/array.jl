@@ -186,3 +186,19 @@ findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
 # We hit this case when there's Float32/Float64 confusion ...
 findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T,U<:T} = x.x
 
+#####
+##### ArrayInterface
+#####
+
+ArrayInterface.parent_type(x::CachedArray) = x
+ArrayInterface.defines_strides(::Type{<:CachedArray}) = true
+ArrayInterface.can_avx(::CachedArray) = true
+
+# Axes
+ArrayInterface.axes_types(::Type{<:CachedArray{T,N}}) where {T,N} = Tuple{Vararg{Base.OneTo{Int},N}}
+ArrayInterface.contiguous_axis(::Type{<:CachedArray}) = ArrayInterface.One()
+ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface.nstatic(Val(N))
+ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N}= ArrayInterface.Zero()
+ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface._all_dense(Val{N}())
+
+ArrayInterface.device(::Type{<:CachedArray}) = ArrayInterface.CPUPointer()

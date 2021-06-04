@@ -11,6 +11,7 @@ import Mmap
 import Random
 
 # Dependencies
+import ArrayInterface
 import DataStructures
 import SIMD
 import MacroTools

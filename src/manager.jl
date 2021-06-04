@@ -52,8 +52,8 @@ mutable struct CacheManager{C}
 
     # local datastructures
     policy::C
-    pmm_heap::CompactHeap{MmapAllocator}
-    dram_heap::CompactHeap{AlignedAllocator}
+    remote_heap::CompactHeap{MmapAllocator}
+    local_heap::CompactHeap{AlignedAllocator}
 
     # Synchronize access
     alloc_lock::Base.Threads.SpinLock
@@ -89,14 +89,14 @@ function CacheManager(
     size_of_remote = 0
 
     # Initialize Heaps
-    pmm_heap = CompactHeap(
+    remote_heap = CompactHeap(
         remote_allocator,
         remotesize;
         pool = Remote,
         minallocation = minallocation,
     )
 
-    dram_heap = CompactHeap(
+    local_heap = CompactHeap(
         AlignedAllocator(),
         localsize;
         pool = Local,
@@ -114,14 +114,14 @@ function CacheManager(
         remote_objects,
         size_of_remote,
         policy,
-        pmm_heap,
-        dram_heap,
+        remote_heap,
+        local_heap,
         Threads.SpinLock(),
         FreeBuffer{Block}(),
 
         # tunables,
-        floor(Int, gc_when_over * sizeof(dram_heap)),
-        AbortCallback(dram_heap, 0),
+        floor(Int, gc_when_over * sizeof(local_heap)),
+        AbortCallback(local_heap, 0),
 
         # runtime settings
         allow_movement,
@@ -205,11 +205,11 @@ function Base.show(io::IO, M::CacheManager)
     println(io, "    $(length(M.remote_objects)) Remote Objects")
     println(
         io,
-        "    $(localsize(M) / 1E9) GB Local Memory Used of $(M.dram_heap.len / 1E9)",
+        "    $(localsize(M) / 1E9) GB Local Memory Used of $(M.local_heap.len / 1E9)",
     )
     println(
         io,
-        "    $(remotesize(M) / 1E9) GB Remote Memory Used of $(M.pmm_heap.len / 1E9)",
+        "    $(remotesize(M) / 1E9) GB Remote Memory Used of $(M.remote_heap.len / 1E9)",
     )
 end
 
@@ -402,7 +402,7 @@ function unsafe_alloc(
     @requires alloc_lock(manager)
 
     start = time_ns()
-    heap = manager.dram_heap
+    heap = manager.local_heap
     if candrain(manager.freebuffer) && cleanup_function(manager, id)
         push!(TIMES, time_ns() - start)
         return Ptr{Nothing}()
@@ -430,7 +430,7 @@ function unsafe_alloc(
         canabort.bytes = bytes
 
         eviction_function(manager, bytes; canabort = canabort)
-        ptr = alloc(manager.dram_heap, bytes, id)
+        ptr = alloc(manager.local_heap, bytes, id)
     end
 
     push!(TIMES, time_ns() - start)
@@ -447,7 +447,7 @@ function unsafe_alloc(
 ) where {F,A}
     @requires alloc_lock(manager)
 
-    heap = manager.pmm_heap
+    heap = manager.remote_heap
     if candrain(manager.freebuffer)
         # If this block gets cleaned up, then first check if it's okay to abort
         # the eviction operation.
@@ -473,10 +473,10 @@ free_convert(x::Block) = _datapointer(x)
 
 free(pool::PoolType, manager::CacheManager, x) = free(pool, manager, free_convert(x))
 function free(::PoolType{Local}, manager::CacheManager, ptr::Ptr{Nothing})
-    return free(manager.dram_heap, ptr)
+    return free(manager.local_heap, ptr)
 end
 function free(::PoolType{Remote}, manager::CacheManager, ptr::Ptr{Nothing})
-    return free(manager.pmm_heap, ptr)
+    return free(manager.remote_heap, ptr)
 end
 
 # Eviction entry point
@@ -506,7 +506,7 @@ function unsafe_eviction!(manager::CacheManager, bytes; canabort::F = alwaysfals
     end
 
     # Perform our managed eviction.
-    evictfrom!(manager.dram_heap, block, bytes; cb = cb)
+    evictfrom!(manager.local_heap, block, bytes; cb = cb)
     return nothing
 end
 
@@ -517,7 +517,7 @@ end
 moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
 
 function moveto!(
-    dram::PoolType{Local},
+    localpool::PoolType{Local},
     block::Block,
     M::CacheManager;
     dirty = true,
@@ -568,10 +568,10 @@ function moveto!(
 
     # Check if this block has multiple watchers.
     # If so, update all references to this block.
-    pmm = PoolType{Remote}()
-    ptr = getobjects(pmm, M)[id]
+    remotepool = PoolType{Remote}()
+    ptr = getobjects(remotepool, M)[id]
     unsafe_store!(ptr, storage_ptr)
-    unsafe_register!(dram, M, newblock, ptr)
+    unsafe_register!(localpool, M, newblock, ptr)
 
     # Set the dirty flag.
     # If `write_before_read` is true, then we MUST mark this block as dirty.
@@ -582,14 +582,14 @@ function moveto!(
 end
 
 function moveto!(
-    pool::PoolType{Remote},
+    remotepool::PoolType{Remote},
     block::Block,
     M::CacheManager;
     canabort = alwaysfalse,
 )
     @requires alloc_lock(M) remove_lock(M.freebuffer)
 
-    dram = PoolType{Local}()
+    localpool = PoolType{Local}()
     id = getid(block)
     # If already in Remote, do nothing
     getpool(block) == Remote && return nothing
@@ -600,7 +600,7 @@ function moveto!(
     createstorage = (sibling === nothing)
     if createstorage
         storage_ptr = unsafe_alloc(
-            PoolType{Remote}(),
+            remotepool,
             M,
             length(block),
             id,
@@ -642,20 +642,20 @@ function moveto!(
     if isqueued(block)
         unsafe_cleanup!(M)
         # Abort operation
-        free(PoolType{Remote}(), M, sibling)
+        free(remotepool, M, sibling)
         return canabort() ? true : nothing
     end
 
     # Update back edges
-    ptr = getobjects(dram, M)[id]
+    ptr = getobjects(localpool, M)[id]
     unsafe_store!(ptr, storage_ptr)
-    createstorage && unsafe_register!(pool, M, sibling, ptr)
+    createstorage && unsafe_register!(remotepool, M, sibling, ptr)
 
     # Deregister this object from local tracking.
-    unsafe_unregister!(dram, M, block)
+    unsafe_unregister!(localpool, M, block)
 
     # Free the block we just removed.
-    free(dram, M, block)
+    free(localpool, M, block)
     setsibling!(sibling, Block())
     return nothing
 end
@@ -666,12 +666,12 @@ end
 
 function check(manager::CacheManager)
     passed = true
-    if !check(manager.pmm_heap)
+    if !check(manager.remote_heap)
         println("Remote Heap failed!")
         passed = false
     end
 
-    if !check(manager.dram_heap)
+    if !check(manager.local_heap)
         println("Local Heap failed!")
         passed = false
     end
@@ -680,7 +680,7 @@ function check(manager::CacheManager)
     # Remote Heap
     seen_ids = Set{UInt64}()
     size_allocated = 0
-    for block in manager.pmm_heap
+    for block in manager.remote_heap
         if !isfree(block)
             push!(seen_ids, CachedArrays.getid(block))
             size_allocated += length(block)
@@ -697,7 +697,7 @@ function check(manager::CacheManager)
     # Local Heap
     seen_ids = Set{UInt64}()
     size_allocated = 0
-    for block in manager.dram_heap
+    for block in manager.local_heap
         if !isfree(block)
             push!(seen_ids, CachedArrays.getid(block))
             size_allocated += length(block)

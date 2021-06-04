@@ -27,8 +27,8 @@
         @test length(manager.remote_objects) == 0
         @test manager.size_of_remote == 0
 
-        @test CachedArrays.check(manager.pmm_heap)
-        @test CachedArrays.check(manager.dram_heap)
+        @test CachedArrays.check(manager.remote_heap)
+        @test CachedArrays.check(manager.local_heap)
         @test CachedArrays.check(manager)
     end
 
@@ -61,8 +61,8 @@
         @test length(manager.remote_objects) == 0
         @test manager.size_of_remote == 0
 
-        @test CachedArrays.check(manager.pmm_heap)
-        @test CachedArrays.check(manager.dram_heap)
+        @test CachedArrays.check(manager.remote_heap)
+        @test CachedArrays.check(manager.local_heap)
         @test CachedArrays.check(manager)
     end
 end

@@ -352,7 +352,6 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
                 current = last
             end
 
-            aborted = true
             @goto cleanup
         end
         sizefreed += current.size

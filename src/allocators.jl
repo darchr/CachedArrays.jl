@@ -14,6 +14,7 @@ function allocate(allocator::MmapAllocator, sz)
     A = open(name; create = true, read = true, write = true) do io
         Mmap.mmap(io, Vector{UInt8}, sz)
     end
+
     # Remove the file - OS will keep it around as long as our process is running and the
     # cleanup once the process terminates.
     rm(name)
