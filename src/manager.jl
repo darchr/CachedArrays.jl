@@ -1,4 +1,10 @@
-_datapointer(x) = convert(Ptr{Ptr{Nothing}}, datapointer(x))
+# Back edges from the manager to the GC managed object holding a block.
+# Kept as a raw Ptr{Ptr} to avoid GC cycles.
+const Backedge = Ptr{Ptr{Nothing}}
+
+backedge(x::Backedge) = x
+backedge(x::Ptr) = convert(Backedge, x)
+backedge(x) = backedge(datapointer(x))
 
 mutable struct Region{T}
     # TODO: Store the allocation function in the block header to avoid taking space in
@@ -8,13 +14,14 @@ mutable struct Region{T}
 
     function Region(ptr::Ptr{Nothing}, manager::T) where {T}
         region = new{T}(ptr, manager)
-
-        # Connect with the manager
-        register!(manager, _datapointer(region), ptr)
+        register!(manager, backedge(region), ptr)
         finalizer(cleanup, region)
         return region
     end
 end
+
+Base.pointer(region::Region) = region.ptr
+datapointer(region::Region) = pointer_from_objref(region)
 
 cleanup(region::Region) = cleanup(manager(region), pointer(region))
 metastyle(::Region) = BlockMeta()
@@ -25,8 +32,9 @@ function alloc(region::Region, bytes::Integer, id = getid(region.manager))
     return Region(ptr, manager(region))
 end
 
-Base.pointer(region::Region) = region.ptr
-datapointer(region::Region) = pointer_from_objref(region)
+#####
+##### Aborting Calllbacks
+#####
 
 mutable struct AbortCallback{H}
     heap::CompactHeap{H}
@@ -35,19 +43,26 @@ end
 
 (f::AbortCallback)() = canalloc(f.heap, f.bytes)
 
-# Maintains Cache management.
-mutable struct CacheManager{C}
-    # Reference to local objects
+#####
+##### Cache Manager
+#####
+
+const RemotePool = PoolType{Remote}
+const LocalPool = PoolType{Local}
+
+struct NoTelemetry end
+mutable struct CacheManager{C,T}
+    # Reference to local objecTts
     # NOTE: These need to be pointers and not `Region`s because we don't want the
     # the manager to protect these objects from being garbage collected.
-    local_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
+    local_objects::Dict{UInt,Backedge}
     size_of_local::Int
 
     # Create a new ID for each object registered in the cache.
     idcount::Threads.Atomic{UInt64}
 
     # All objects with remote memory.
-    remote_objects::Dict{UInt,Ptr{Ptr{Nothing}}}
+    remote_objects::Dict{UInt,Backedge}
     size_of_remote::Int
 
     # local datastructures
@@ -65,6 +80,7 @@ mutable struct CacheManager{C}
 
     ## Prevent arrays from moving
     allow_movement::Bool
+    telemetry::T
 end
 
 free_lock(manager::CacheManager) = manager.free_lock
@@ -77,15 +93,16 @@ function CacheManager(
     policy = LRU{Block}(),
     gc_when_over = 0.95,
     minallocation = 10,
+    telemetry = NoTelemetry(),
 )
     # If we're in 2LM, pass a nullptr.
     # MemKindAllocator gets swapped to something that throws an error if called.
     remote_allocator = MmapAllocator(path)
 
-    local_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
+    local_objects = Dict{UInt,Backedge}()
     size_of_local = 0
 
-    remote_objects = Dict{UInt,Ptr{Ptr{Nothing}}}()
+    remote_objects = Dict{UInt,Backedge}()
     size_of_remote = 0
 
     # Initialize Heaps
@@ -125,12 +142,36 @@ function CacheManager(
 
         # runtime settings
         allow_movement,
+
+        # telemetry
+        telemetry,
     )
 
-    # Add this to the global manager list to ensure that it outlives any of its users
+    # Add this to the global manager list to ensure that it outlives any of its users.
     push!(GlobalManagers, manager)
     return manager
 end
+
+#####
+##### Telemetry
+#####
+
+gettelemetry(manager::CacheManager) = manager.telemetry
+telemetry_enabled(::CacheManager) = true
+telemetry_enabled(::CacheManager{<:Any,NoTelemetry}) = false
+
+macro telemetry(manager, expr)
+    return quote
+        if telemetry_enabled($(esc(manager)))
+            $(esc(expr))
+        end
+    end
+end
+
+# TODO: Finalize API
+function telemetry_alloc end
+function telemetry_gc end
+function telemetry_change end
 
 #####
 ##### Policy Hints
@@ -169,21 +210,21 @@ pool(A) = getpool(metadata(A))
 function prefetch!(A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        moveto!(PoolType{Local}(), A, _manager; kw...)
+        moveto!(LocalPool(), A, _manager; kw...)
     end
 end
 
 function shallowfetch!(A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        moveto!(PoolType{Local}(), A, manager(A); kw..., write_before_read = true)
+        moveto!(LocalPool(), A, manager(A); kw..., write_before_read = true)
     end
 end
 
 function evict!(A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        moveto!(PoolType{Remote}(), A, manager(A); kw...)
+        moveto!(RemotePool(), A, manager(A); kw...)
     end
 end
 
@@ -223,15 +264,15 @@ remotesize(manager::CacheManager) = manager.size_of_remote
 ##### API for adding and removing items from the
 #####
 
-getobjects(::PoolType{Local}, M::CacheManager) = M.local_objects
-getobjects(::PoolType{Remote}, M::CacheManager) = M.remote_objects
+getobjects(::LocalPool, M::CacheManager) = M.local_objects
+getobjects(::RemotePool, M::CacheManager) = M.remote_objects
 
-adjust_size!(::PoolType{Local}, M::CacheManager, x) = M.size_of_local += x
-adjust_size!(::PoolType{Remote}, M::CacheManager, x) = M.size_of_remote += x
+adjust_size!(::LocalPool, M::CacheManager, x) = (M.size_of_local += x)
+adjust_size!(::RemotePool, M::CacheManager, x) = (M.size_of_remote += x)
 
 function register!(
     manager::CacheManager,
-    datapointer::Ptr{Ptr{Nothing}},
+    backedge::Backedge,
     allocated_pointer::Ptr{Nothing},
 )
     @spinlock alloc_lock(manager) begin
@@ -240,9 +281,9 @@ function register!(
         # Statically dispatch to avoid a potential allocation.
         p = block.pool
         if p == Local
-            unsafe_register!(PoolType{Local}(), manager, block, datapointer)
+            unsafe_register!(LocalPool(), manager, block, backedge)
         elseif p == Remote
-            unsafe_register!(PoolType{Remote}(), manager, block, datapointer)
+            unsafe_register!(RemotePool(), manager, block, backedge)
         else
             error("Unknown Pool: $p")
         end
@@ -250,7 +291,12 @@ function register!(
     return nothing
 end
 
-function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr) where {T}
+function unsafe_register!(
+    pool::PoolType{T},
+    M::CacheManager,
+    block::Block,
+    backedge::Backedge,
+) where {T}
     @requires alloc_lock(M)
     @check block.pool == T
     id = getid(block)
@@ -263,12 +309,12 @@ function unsafe_register!(pool::PoolType{T}, M::CacheManager, block::Block, ptr)
     if T == Local
         push!(M.policy, block)
     end
-    objects[id] = convert(Ptr{Ptr{Nothing}}, ptr)
+    objects[id] = backedge
     adjust_size!(pool, M, length(block))
     return nothing
 end
 
-update!(::PoolType{Local}, M::CacheManager, A) = update!(M.policy, metadata(A))
+update!(::LocalPool, M::CacheManager, A) = update!(M.policy, metadata(A))
 
 # Top level entry points
 function unregister!(pool, M::CacheManager, A)
@@ -332,16 +378,17 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
             # If this block is in Remote, make sure it doesn't have a sibling - otherwise, that would
             # be an error.
             id == getid(block) && (id_cleaned = true)
+            @telemetry M telemetry_gc(gettelemetry(M), getid(block))
             pool = getpool(block)
             if pool == Remote
                 @check getsibling(block) === nothing
 
                 # Deregister from Remote. If there are zero remaining references,
                 # then we free the block
-                unsafe_unregister!(PoolType{Remote}(), M, block)
-                free(PoolType{Remote}(), M, block)
+                unsafe_unregister!(RemotePool(), M, block)
+                free(RemotePool(), M, block)
             elseif pool == Local
-                unsafe_unregister!(PoolType{Local}(), M, block)
+                unsafe_unregister!(LocalPool(), M, block)
 
                 # Does this block have a sibling?
                 sibling = getsibling(block)
@@ -350,10 +397,10 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
                     @check getpool(sibling) == Remote
 
                     # use `unsafe_unregister!` to completely remove this block.
-                    unsafe_unregister!(PoolType{Remote}(), M, block)
-                    free(PoolType{Remote}(), M, sibling)
+                    unsafe_unregister!(RemotePool(), M, block)
+                    free(RemotePool(), M, sibling)
                 end
-                free(PoolType{Local}(), M, block)
+                free(LocalPool(), M, block)
             end
         end
         empty!(cleanlist)
@@ -382,17 +429,31 @@ function alloc(manager::CacheManager, bytes::Int, id::UInt = getid(manager))
 end
 
 function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
-    ptr = unsafe_alloc(PoolType{Local}(), manager, bytes, id)
-    ptr === nothing || return ptr
+    # Don't bother trying to allocate to the local heap if the requested allocation
+    # is bigger than the heap anyways.
+    if bytes <= sizeof(manager.local_heap)
+        ptr = unsafe_alloc(LocalPool(), manager, bytes, id)
+        if ptr !== nothing
+            @telemetry manager telemetry_alloc(
+                gettelemetry(manager),
+                manager,
+                bytes,
+                id,
+                ptr,
+                Local,
+            )
+            return ptr
+        end
+    end
 
     # No free space. Try to allocate from Remote
-    return unsafe_alloc(PoolType{Remote}(), manager, bytes, id)
+    ptr = unsafe_alloc(RemotePool(), manager, bytes, id)
+    @telemetry manager telemetry_alloc(manager, bytes, id, ptr, Remote)
+    return ptr
 end
 
-const TIMES = UInt64[]
-
 function unsafe_alloc(
-    ::PoolType{Local},
+    ::LocalPool,
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager),
@@ -401,10 +462,8 @@ function unsafe_alloc(
 ) where {F,G}
     @requires alloc_lock(manager)
 
-    start = time_ns()
     heap = manager.local_heap
     if candrain(manager.freebuffer) && cleanup_function(manager, id)
-        push!(TIMES, time_ns() - start)
         return Ptr{Nothing}()
     end
 
@@ -433,12 +492,11 @@ function unsafe_alloc(
         ptr = alloc(manager.local_heap, bytes, id)
     end
 
-    push!(TIMES, time_ns() - start)
     return ptr
 end
 
 function unsafe_alloc(
-    ::PoolType{Remote},
+    ::RemotePool,
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager),
@@ -467,15 +525,18 @@ function unsafe_alloc(
 end
 
 # Dispatch plumbing!
+#
+# Try to ultimately convert an object to a pointer to the start of the user accessible
+# data region.
 free_convert(x::Array) = pointer(x)
 free_convert(x::Ptr) = convert(Ptr{Nothing}, x)
-free_convert(x::Block) = _datapointer(x)
+free_convert(x::Block) = datapointer(x)
 
 free(pool::PoolType, manager::CacheManager, x) = free(pool, manager, free_convert(x))
-function free(::PoolType{Local}, manager::CacheManager, ptr::Ptr{Nothing})
+function free(::LocalPool, manager::CacheManager, ptr::Ptr{Nothing})
     return free(manager.local_heap, ptr)
 end
-function free(::PoolType{Remote}, manager::CacheManager, ptr::Ptr{Nothing})
+function free(::RemotePool, manager::CacheManager, ptr::Ptr{Nothing})
     return free(manager.remote_heap, ptr)
 end
 
@@ -488,7 +549,7 @@ function unsafe_eviction!(manager::CacheManager, bytes; canabort::F = alwaysfals
     @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
     # The eviction callback
-    cb = block -> moveto!(PoolType{Remote}(), block, manager; canabort)
+    cb = block -> moveto!(RemotePool(), block, manager; canabort)
 
     isempty(manager.policy) && return nothing
     token = fullpop!(manager.policy)
@@ -517,7 +578,7 @@ end
 moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
 
 function moveto!(
-    localpool::PoolType{Local},
+    localpool::LocalPool,
     block::Block,
     M::CacheManager;
     dirty = true,
@@ -538,14 +599,8 @@ function moveto!(
     @check getsibling(block) === nothing
 
     # Otherwise, we need to allocate some local data for it.
-    storage_ptr = unsafe_alloc(
-        PoolType{Local}(),
-        M,
-        length(block),
-        id,
-        unsafe_cleanup!,
-        unsafe_eviction!,
-    )
+    storage_ptr =
+        unsafe_alloc(LocalPool(), M, length(block), id, unsafe_cleanup!, unsafe_eviction!)
 
     # Null pointer returned - corresponding block in Remote has been freed.
     # No need to finish the move.
@@ -568,8 +623,7 @@ function moveto!(
 
     # Check if this block has multiple watchers.
     # If so, update all references to this block.
-    remotepool = PoolType{Remote}()
-    ptr = getobjects(remotepool, M)[id]
+    ptr = getobjects(RemotePool(), M)[id]
     unsafe_store!(ptr, storage_ptr)
     unsafe_register!(localpool, M, newblock, ptr)
 
@@ -582,14 +636,13 @@ function moveto!(
 end
 
 function moveto!(
-    remotepool::PoolType{Remote},
+    remotepool::RemotePool,
     block::Block,
     M::CacheManager;
     canabort = alwaysfalse,
 )
     @requires alloc_lock(M) remove_lock(M.freebuffer)
 
-    localpool = PoolType{Local}()
     id = getid(block)
     # If already in Remote, do nothing
     getpool(block) == Remote && return nothing
@@ -647,15 +700,15 @@ function moveto!(
     end
 
     # Update back edges
-    ptr = getobjects(localpool, M)[id]
+    ptr = getobjects(LocalPool(), M)[id]
     unsafe_store!(ptr, storage_ptr)
     createstorage && unsafe_register!(remotepool, M, sibling, ptr)
 
     # Deregister this object from local tracking.
-    unsafe_unregister!(localpool, M, block)
+    unsafe_unregister!(LocalPool(), M, block)
 
     # Free the block we just removed.
-    free(localpool, M, block)
+    free(LocalPool(), M, block)
     setsibling!(sibling, Block())
     return nothing
 end

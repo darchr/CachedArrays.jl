@@ -14,7 +14,7 @@ struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
     function CachedArray{T,N}(
         region::Region{M},
         dims::NTuple{N,Int},
-        status::S = ReadWrite(),
+        status::S = NotBusy(),
     ) where {T,N,S,M}
         if !isbitstype(T)
             throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
@@ -28,31 +28,12 @@ metastyle(::CachedArray) = BlockMeta()
 datapointer(A::CachedArray) = datapointer(region(A))
 manager(A::CachedArray) = manager(region(A))
 
-@inline Base.pointer(A::CachedArray{T}) where {T} = Ptr{T}(pointer(region(A)))
+@inline unsafe_pointer(A::CachedArray{T}) where {T} = Ptr{T}(pointer(region(A)))
 
-# State Transitions
-# N.B. - Oned state tracking is implemented in the backend, make sure to use semaphores
-# since it's conceivable that multiple sections of code could be working with an array at
-# a time.
-#
-# We could even go crazy and implement Rust like semantics about mutable and immutable
-# copies (albeit much less strictly enforced on the compiler level)
-readable(x::CachedArray{T,N,S}) where {T,N,S<:Readable} = x
-function readable(x::CachedArray{T,N,S}) where {T,N,S}
-    return CachedArray{T,N}(region(x), size(x), ReadOnly())
-end
-
-writable(x::CachedArray{T,N,S}) where {T,N,S<:Writable} = x
-function writable(x::CachedArray{T,N,S}) where {T,N,S}
-    return CachedArray{T,N}(region(x), size(x), ReadWrite())
-end
-
-# The behavior of these two is the same for the time being.
-readwrite(x::CachedArray) = writable(x)
-
-release(x::CachedArray{T,N,NotBusy}) where {T,N} = x
-function release(x::CachedArray{T,N,S}) where {T,N,S}
-    return CachedArray{T,N}(region(x), size(x), NotBusy())
+# Don't let functions normally take pointers to un-acquired CachedArrays.
+Base.pointer(A::CachedArray) = unsafe_pointer(A)
+function Base.pointer(A::CachedArray{<:Any,<:Any,NotBusy})
+    error("Cannot take a pointer to to a `NotBusy` CachedArray")
 end
 
 #####
@@ -85,6 +66,7 @@ end
 ##### Array Interface
 #####
 
+# Go through the "pointer" API to capture "NotBusy" arrays.
 Base.unsafe_convert(::Type{Ptr{T}}, A::CachedArray{T}) where {T} = pointer(A)
 Base.sizeof(A::CachedArray) = prod(size(A)) * sizeof(eltype(A))
 @inline Base.size(A::CachedArray) = A.dims
@@ -120,7 +102,10 @@ end
 # For alias detection
 Base.dataids(A::CachedArray) = (UInt(pointer(A)),)
 
-function Base.reshape(x::CachedArray{T,M,S}, dims::NTuple{N,Int}) where {T,N,M,S}
+function Base.reshape(
+    x::CachedArray{T,M,S},
+    dims::NTuple{N,Int},
+) where {T,N,M,S<:Readable}
     throw_dmrsa(dims, len) =
         throw(DimensionMismatch("new dimensions $(dims) must be consistent with array size $len"))
 
@@ -190,15 +175,56 @@ findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T,U<:T} = x.x
 ##### ArrayInterface
 #####
 
+# Need to fill these out to make LoopVectorization happy.
 ArrayInterface.parent_type(x::CachedArray) = x
 ArrayInterface.defines_strides(::Type{<:CachedArray}) = true
 ArrayInterface.can_avx(::CachedArray) = true
 
 # Axes
-ArrayInterface.axes_types(::Type{<:CachedArray{T,N}}) where {T,N} = Tuple{Vararg{Base.OneTo{Int},N}}
+ArrayInterface.axes_types(::Type{<:CachedArray{T,N}}) where {T,N} =
+    Tuple{Vararg{Base.OneTo{Int},N}}
 ArrayInterface.contiguous_axis(::Type{<:CachedArray}) = ArrayInterface.One()
-ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface.nstatic(Val(N))
-ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N}= ArrayInterface.Zero()
-ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface._all_dense(Val{N}())
+ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N} =
+    ArrayInterface.nstatic(Val(N))
+ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N} =
+    ArrayInterface.Zero()
+ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N} =
+    ArrayInterface._all_dense(Val{N}())
 
 ArrayInterface.device(::Type{<:CachedArray}) = ArrayInterface.CPUPointer()
+
+#####
+##### State Changes
+#####
+
+# N.B. - Once state tracking is implemented in the backend, make sure to use semaphores
+# since it's conceivable that multiple sections of code could be working with an array at
+# a time.
+#
+# We could even go crazy and implement Rust like semantics about mutable and immutable
+# copies (albeit much less strictly enforced on the compiler level)
+readable(x::CachedArray{T,N,S}) where {T,N,S<:Readable} = x
+function readable(x::CachedArray{T,N,S}) where {T,N,S}
+    return CachedArray{T,N}(region(x), size(x), ReadOnly())
+end
+
+writable(x::CachedArray{T,N,S}) where {T,N,S<:Writable} = x
+function writable(x::CachedArray{T,N,S}) where {T,N,S}
+    return CachedArray{T,N}(region(x), size(x), ReadWrite())
+end
+
+# The behavior of these two is the same for the time being.
+readwrite(x::CachedArray) = writable(x)
+
+release(x::CachedArray{T,N,NotBusy}) where {T,N} = x
+function release(x::CachedArray{T,N,S}) where {T,N,S}
+    return CachedArray{T,N}(region(x), size(x), NotBusy())
+end
+
+# Transposes
+function readable(x::LinearAlgebra.Transpose{<:Any,<:CachedArray{T,N,S}}) where {T,N,S}
+    # Unlock the parent and create a new transpose object.
+    return transpose(readable(parent(x)))
+end
+readable(x::LinearAlgebra.Transpose{T,<:CachedArray{T,N,S}}) where {T,N,S<:Readable} = x
+

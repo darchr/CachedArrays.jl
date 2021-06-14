@@ -1,12 +1,13 @@
 module CachedArrays
 
-export CachedArray
+export CachedArray, @hint
 
 # base
 import Base: @lock
 
 # stdlib
 import Dates
+import LinearAlgebra
 import Mmap
 import Random
 
@@ -90,6 +91,7 @@ include("policy/policy.jl")
 
 # Implementation of the arrays and cache manager
 include("manager.jl")
+include("telemetry/telemetry.jl")
 
 # Array Implementstions
 include("llvm.jl")

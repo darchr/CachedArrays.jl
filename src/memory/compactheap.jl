@@ -365,7 +365,10 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
 
     # Walk backwards if we have to in order to free enough space.
     while sizefreed < sz
-        block = walkprevious(heap, block)
+        candidate = walkprevious(heap, block)
+        candidate === nothing && break
+        block = candidate
+
         abort = evict!(cb, heap, block)
         if (abort === true)
             block.evicting = false
