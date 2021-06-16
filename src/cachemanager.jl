@@ -83,7 +83,6 @@ mutable struct CacheManager{C,T}
     telemetry::T
 end
 
-free_lock(manager::CacheManager) = manager.free_lock
 alloc_lock(manager::CacheManager) = manager.alloc_lock
 
 function CacheManager(
@@ -97,7 +96,6 @@ function CacheManager(
 )
     # If we're in 2LM, pass a nullptr.
     # MemKindAllocator gets swapped to something that throws an error if called.
-    remote_allocator = MmapAllocator(path)
 
     local_objects = Dict{UInt,Backedge}()
     size_of_local = 0
@@ -107,7 +105,7 @@ function CacheManager(
 
     # Initialize Heaps
     remote_heap = CompactHeap(
-        remote_allocator,
+        MmapAllocator(path),
         remotesize;
         pool = Remote,
         minallocation = minallocation,

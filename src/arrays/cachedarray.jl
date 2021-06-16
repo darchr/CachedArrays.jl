@@ -28,6 +28,7 @@ const ReadableCachedArray{T,N} = CachedArray{T,N,<:Readable,<:Any}
 const UnreadableCachedArray{T,N} = CachedArray{T,N,NotBusy,<:Any}
 const WritableCachedArray{T,N} = CachedArray{T,N,<:Writable,<:Any}
 const UnwritableCachedArray{T,N} = CachedArray{T,N,<:Union{NotBusy,ReadOnly},<:Any}
+const BusyCachedArray{T,N} = CachedArray{T,N,<:Union{ReadOnly,ReadWrite},<:Any}
 
 @inline region(A::CachedArray) = A.region
 metastyle(::CachedArray) = BlockMeta()
@@ -58,8 +59,8 @@ function CachedArray{T,N}(x::Array{T,N}, manager) where {T,N}
     return CachedArray{T,N}(region, size(x))
 end
 
-function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
-    return CachedArray{T}(undef, manager, (convert(Int, i),))
+function CachedArray{T}(::UndefInitializer, manager, i::Integer...) where {T}
+    return CachedArray{T}(undef, manager, convert.(Int, i))
 end
 
 function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}; status = NotBusy()) where {T,N}
@@ -98,7 +99,7 @@ function Base.similar(
     dims::Tuple{Vararg{Int,N}} = size(A);
     status = ReadWrite(),
 ) where {T,N}
-    CachedArray{eltyp}(undef, manager(A), dims; status = status)
+    CachedArray{T}(undef, manager(A), dims; status = status)
 end
 
 function Base.iterate(A::CachedArray{<:Any,<:Any,S}, i::Int = 1) where {S<:Readable}
@@ -227,13 +228,6 @@ release(x::CachedArray{T,N,NotBusy}) where {T,N} = x
 function release(x::CachedArray{T,N,S}) where {T,N,S}
     return CachedArray{T,N}(region(x), size(x), NotBusy())
 end
-
-# Transposes
-function readable(x::LinearAlgebra.Transpose{<:Any,<:CachedArray{T,N,S}}) where {T,N,S}
-    # Unlock the parent and create a new transpose object.
-    return transpose(readable(parent(x)))
-end
-readable(x::LinearAlgebra.Transpose{T,<:CachedArray{T,N,S}}) where {T,N,S<:Readable} = x
 
 # Automatic Conversion.
 function Base.convert(::Type{CachedArray{T,N,NotBusy,M}}, x::CachedArray{T,N,S,M}) where {T,N,S,M}

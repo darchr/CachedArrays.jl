@@ -23,6 +23,11 @@ function Base.push!(buf::FreeBuffer, x)
     # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "Released $(getid(x))\n");
 end
 
+# Special Case Pointers
+function Base.push!(buf::FreeBuffer{Ptr{Nothing}}, x::Ptr{Nothing})
+    @spinlock add_lock(buf) push!(buf.add, x)
+end
+
 # Assumes that the "remove" lock is already held.
 function unsafe_swap!(buf::FreeBuffer)
     @requires remove_lock(buf)

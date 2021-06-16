@@ -1,3 +1,55 @@
+#####
+##### Wrapper Types
+#####
+
+const STATE_CHANGES = [
+    :readable,
+    :writable,
+    :release
+]
+
+# TODO: Make no-op in case of no required state change.
+macro wrapper(typ, fields...)
+    if isa(fields[1], Expr)
+        expr = fields[1]
+        fields = fields[2:end]
+
+        # Validate applicable methods
+        if expr.head != :tuple
+            error("If applying a subset of methods, please provide list as a tuple.")
+        end
+
+        fns = expr.args
+        @assert all(in(STATE_CHANGES), fns)
+    else
+        fns = STATE_CHANGES
+    end
+
+    # Construct a builder for our generated expressions.
+    fns = [esc(:(CachedArrays.$f)) for f in fns]
+    fields = map(QuoteNode, fields)
+    function builder(f)
+        accessors = [:($f(getproperty(x, $field))) for field in fields]
+        nt = :(NamedTuple{($(fields...),)}(($(accessors...),)))
+        return quote
+            function $f(x::$(esc(typ)))
+                return ConstructionBase.setproperties(x, $nt)
+            end
+        end
+    end
+
+    overloads = [builder(f) for f in fns]
+    return quote
+        $(overloads...)
+    end
+end
+
+@wrapper LinearAlgebra.Transpose parent
+
+#####
+##### @annotate
+#####
+
 # Macro for defining our extensions.
 macro annotate(fn)
     return annotate_impl(fn)

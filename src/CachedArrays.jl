@@ -15,6 +15,7 @@ import Random
 
 # Dependencies
 import ArrayInterface
+import ConstructionBase
 import DataStructures
 import SIMD
 import MacroTools
@@ -92,14 +93,16 @@ include("memory/memory.jl")
 include("policy/policy.jl")
 
 # Implementation of the arrays and cache manager
-include("manager.jl")
+include("heapmanager.jl")
+include("cachemanager.jl")
 include("telemetry/telemetry.jl")
 
 # Array Implementstions
 include("llvm.jl")
 using .LoadStore: LoadStore
 
-include("array.jl")
+include("arrays/cachedarray.jl")
+include("arrays/heaparray.jl")
 
 # Fast "memcpy"
 include("memcpy.jl")
@@ -115,6 +118,10 @@ include("lib.jl")
 # We can periodically GC the mangers to see if they are no longer holding onto anything,
 # at which point we're free to reclaim their resources.
 const GlobalManagers = CacheManager[]
+
+# Any allocators NOT attached to a CacheManager will be put here.
+# TODO: Allocator cleanup.
+const GlobalHeaps = Any[]
 
 function gc_managers()
     # Find all the managers that can be garbage collected.
