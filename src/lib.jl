@@ -1,6 +1,6 @@
 # Macro for defining our extensions.
-macro hint(fn)
-    return hint_impl(fn)
+macro annotate(fn)
+    return annotate_impl(fn)
 end
 
 # TODO: More generic treatment of wrapper types.
@@ -8,65 +8,7 @@ maybesuper(::T) where {T <: LinearAlgebra.Transpose{<:Any,<:CachedArray}} = supe
 maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
 maybesuper(::T) where {T} = T
 
-function hint_impl(fn)
-    # Get the split version of the function.
-    def, oldargs = prepare_function(fn)
-
-    function handle_invoke(x)
-        if isa(x, Symbol)
-            if in(x, oldargs)
-                return :($(esc(x)))
-            end
-            return x
-        end
-
-        if MacroTools.@capture(x, f_(args__))
-            if isa(f, Symbol) && f == :__invoke__
-                return quote
-                    names = ($(args...),)
-                    $(Base.invoke)(
-                        $(def[:name]),
-                        Tuple{maybesuper.(names)...},
-                        names...,
-                    )
-                end
-            end
-        end
-        return x
-    end
-
-    # Process the body of the function, converting keywords into CachedArray calls
-    # and splicing in the created "invoke" statement above.
-    def[:body] = process_body(def[:body], handle_invoke)
-    return MacroTools.combinedef(def)
-end
-
-function prepare_function(expr::Expr)
-    # Make the function definition complete for MacroTool's sake.
-    def = MacroTools.splitdef(expr)
-    def[:name] = esc(def[:name])
-    oldargs = first.(MacroTools.splitarg.(def[:args]))
-    def[:args] .= esc.(def[:args])
-
-    return def, oldargs
-end
-
-#####
-##### Postwalk pipeline
-#####
-
-# If we see the magic "__invoke__" keyword, splice in the appropriate invocation of
-# the base function we're actually trying to call.
-process_statement(x, handle_invoke) = handle_invoke(x)
-function process_statement(x::Expr, handle_invoke)
-    # Maybe modify function calls if they are not scoped by a module prefix.
-    if x.head == :call && isa(x.args[1], Symbol)
-        x.args[1] = maybe_process_call(x.args[1])
-    end
-    return handle_invoke(x)
-end
-
-const KEYWORDS = [
+const CACHEDARRAY_KEYWORDS = [
     "prefetch!",
     "evict!",
     "readable",
@@ -80,28 +22,105 @@ function maybe_process_call(sym::Symbol)
     if startswith(symstring, "__") && endswith(symstring, "__")
         # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
         substr = symstring[3:end-2]
-        if in(substr, KEYWORDS)
+        if in(substr, CACHEDARRAY_KEYWORDS)
             return :($(Symbol(substr)))
         end
     end
     return sym
 end
 
-function process_body(body::Expr, handle_invoke)
-    # Clean up line numbers
-    body = MacroTools.postwalk(MacroTools.rmlines, body)
-    _isempty = (body == :())
+function annotate_impl(fn)
+    # Get the split version of the function.
+    def, oldargs = prepare_function(fn)
 
-    if !_isempty && body.head != :block
-        error("Expression must be a block. Instead, it is $(body.head)")
-    end
-
-    if !_isempty
-        body = MacroTools.postwalk(body) do expr
-            return process_statement(expr, handle_invoke)
+    function process_item(x)
+        # We need to escape all arguments in the function signature in order to allow
+        # type annotations to be scoped correctly.
+        #
+        # As a result, every time we see one of the original argument symbols in the
+        # body of the function, we must escape it so that internal uses match the
+        # modified function signature.
+        if isa(x, Symbol) && in(x, oldargs)
+            return esc(x)
         end
+
+        # Next, we handle inner function calls by looking for our magic keyhwords.
+        # If we find one of out magic keyword functions, replace it with a call to
+        # the corresponding `CachedArrays` function.
+        #
+        # If we come across the magic `__invoke__` keyword, then we must replace the
+        # callsite with the correct `Base.invoke` call.
+        if MacroTools.@capture(x, f_(args__))
+            # Only interested in our keywords, which will always be symbols in the
+            # processed code (hopefully).
+            if isa(f, Symbol)
+                if f == :__invoke__
+                    # Deal with keywords.
+                    # Keywords get stored at the start of a function call as a "parameters"
+                    # expression.
+                    #
+                    # Don't need to do this for the other function calls because they
+                    # already get treated correctly.
+                    if !isempty(args) && isa(args[1], Expr) && args[1].head == :parameters
+                        # Kind of a hack - remove the "parameters" head so we can splat
+                        # out the keywords in the correct position.
+                        kwargs = args[1].args
+                        popfirst!(args)
+                    else
+                        kwargs = []
+                    end
+                    return quote
+                        tup = ($(args...),)
+                        $(Base.invoke)(
+                            $(def[:name]),
+                            Tuple{maybesuper.(tup)...},
+                            tup...;
+                            $(kwargs...),
+                        )
+                    end
+                elseif f == :__recurse__
+                    return :($(def[:name])($(args...)))
+                else
+                    newf = maybe_process_call(f)
+                    return :($newf($(args...)))
+                end
+            end
+        end
+
+        # Default behavior - no modification.
+        return x
     end
 
-    return MacroTools.prettify(body)
+    # Process the body of the function, converting keywords into CachedArray calls
+    # and splicing in the created "invoke" statement above.
+    def[:body] = MacroTools.postwalk(process_item, def[:body])
+    return MacroTools.combinedef(def)
+end
+
+argname(x) = first(MacroTools.splitarg(x))
+function prepare_function(expr::Expr)
+    # Make the function definition complete for MacroTool's sake.
+    def = MacroTools.splitdef(expr)
+
+    # Record the symbols of the arguments to ensure we escape the symbols where necessary
+    # in the body of the macro.
+    #
+    # Also, capture the function name as well since it could belong to a callable struct.
+    oldargs = []
+    for arg in def[:args]
+        push!(oldargs, argname(arg))
+    end
+    push!(oldargs, argname(def[:name]))
+    for arg in def[:kwargs]
+        push!(oldargs, argname(arg))
+    end
+
+    # Get scoping of function definition correct.
+    def[:name] = esc(def[:name])
+    def[:args] = esc.(def[:args])
+    def[:whereparams] = esc.(def[:whereparams])
+    def[:kwargs] = esc.(def[:kwargs])
+
+    return def, oldargs
 end
 

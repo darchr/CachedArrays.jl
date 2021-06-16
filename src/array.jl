@@ -23,6 +23,12 @@ struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
     end
 end
 
+# Aliases
+const ReadableCachedArray{T,N} = CachedArray{T,N,<:Readable,<:Any}
+const UnreadableCachedArray{T,N} = CachedArray{T,N,NotBusy,<:Any}
+const WritableCachedArray{T,N} = CachedArray{T,N,<:Writable,<:Any}
+const UnwritableCachedArray{T,N} = CachedArray{T,N,<:Union{NotBusy,ReadOnly},<:Any}
+
 @inline region(A::CachedArray) = A.region
 metastyle(::CachedArray) = BlockMeta()
 datapointer(A::CachedArray) = datapointer(region(A))
@@ -56,10 +62,10 @@ function CachedArray{T}(::UndefInitializer, manager, i::Integer) where {T}
     return CachedArray{T}(undef, manager, (convert(Int, i),))
 end
 
-function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}) where {T,N}
+function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}; status = NotBusy()) where {T,N}
     isbitstype(T) || error("Can only create CachedArrays of `isbitstypes`!")
     region = alloc(manager, prod(dims) * sizeof(T))
-    return CachedArray{T,N}(region, dims)
+    return CachedArray{T,N}(region, dims, status)
 end
 
 #####
@@ -89,9 +95,10 @@ Base.IndexStyle(::Type{<:CachedArray}) = Base.IndexLinear()
 function Base.similar(
     A::CachedArray,
     eltyp::Type{T} = eltype(A),
-    dims::Tuple{Vararg{Int,N}} = size(A),
+    dims::Tuple{Vararg{Int,N}} = size(A);
+    status = ReadWrite(),
 ) where {T,N}
-    CachedArray{eltyp}(undef, manager(A), dims)
+    CachedArray{eltyp}(undef, manager(A), dims; status = status)
 end
 
 function Base.iterate(A::CachedArray{<:Any,<:Any,S}, i::Int = 1) where {S<:Readable}
@@ -105,7 +112,7 @@ Base.dataids(A::CachedArray) = (UInt(pointer(A)),)
 function Base.reshape(
     x::CachedArray{T,M,S},
     dims::NTuple{N,Int},
-) where {T,N,M,S<:Readable}
+) where {T,N,M,S}
     throw_dmrsa(dims, len) =
         throw(DimensionMismatch("new dimensions $(dims) must be consistent with array size $len"))
 
@@ -228,3 +235,7 @@ function readable(x::LinearAlgebra.Transpose{<:Any,<:CachedArray{T,N,S}}) where 
 end
 readable(x::LinearAlgebra.Transpose{T,<:CachedArray{T,N,S}}) where {T,N,S<:Readable} = x
 
+# Automatic Conversion.
+function Base.convert(::Type{CachedArray{T,N,NotBusy,M}}, x::CachedArray{T,N,S,M}) where {T,N,S,M}
+    return release(x)
+end

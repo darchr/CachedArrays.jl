@@ -1,6 +1,8 @@
 module CachedArrays
 
-export CachedArray, @hint
+export CachedArray,
+    ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
+export @annotate
 
 # base
 import Base: @lock
