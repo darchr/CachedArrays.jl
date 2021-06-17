@@ -61,7 +61,8 @@
     # Prefetch A, should kick out both B.
     # C should stay in the cache.
     CachedArrays.prefetch!(A)
-    @test pointer(A) != pointer(C)
+    unsafe_pointer(x) = CachedArrays.unsafe_pointer(x)
+    @test unsafe_pointer(A) != unsafe_pointer(C)
     @test CachedArrays.inlocal(manager, A)
     @test !CachedArrays.inlocal(manager, B)
     @test CachedArrays.inlocal(manager, C)

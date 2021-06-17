@@ -30,11 +30,13 @@ const WritableCachedArray{T,N} = CachedArray{T,N,<:Writable,<:Any}
 const UnwritableCachedArray{T,N} = CachedArray{T,N,<:Union{NotBusy,ReadOnly},<:Any}
 const BusyCachedArray{T,N} = CachedArray{T,N,<:Union{ReadOnly,ReadWrite},<:Any}
 
-@inline region(A::CachedArray) = A.region
+region(A::CachedArray) = A.region
 metastyle(::CachedArray) = BlockMeta()
 datapointer(A::CachedArray) = datapointer(region(A))
 manager(A::CachedArray) = manager(region(A))
 
+# Escape hatch to ALWAYS get a pointer, regardless of the status of the array.
+# Should only be called directly by `Base.pointer` or by the `CacheManager`.
 @inline unsafe_pointer(A::CachedArray{T}) where {T} = Ptr{T}(pointer(region(A)))
 
 # Don't let functions normally take pointers to un-acquired CachedArrays.
@@ -49,18 +51,18 @@ end
 
 CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
 
-function CachedArray{T,N}(x::Array{T,N}, manager) where {T,N}
+function CachedArray{T,N}(x::Array{T,N}, manager; status = NotBusy()) where {T,N}
     # Make sure we don't catch an interrupt between asking for an allocation and then
     # finishing.
     #
     # TODO: Maybe extend the allocation API to handle this automatically ...
     region = alloc(manager, sizeof(x))
     unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
-    return CachedArray{T,N}(region, size(x))
+    return CachedArray{T,N}(region, size(x), status)
 end
 
-function CachedArray{T}(::UndefInitializer, manager, i::Integer...) where {T}
-    return CachedArray{T}(undef, manager, convert.(Int, i))
+function CachedArray{T}(::UndefInitializer, manager, i::Integer...; kw...) where {T}
+    return CachedArray{T}(undef, manager, convert.(Int, i); kw...)
 end
 
 function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}; status = NotBusy()) where {T,N}

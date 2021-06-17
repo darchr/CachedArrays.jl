@@ -362,8 +362,10 @@ end
 prepare_cleanup!(manager::CacheManager) = unsafe_swap!(manager.freebuffer)
 
 # N.B. - `free_lock` must be held to call this.
+const TIMES = UInt64[]
 function unsafe_cleanup!(M::CacheManager, id = nothing)
     @requires alloc_lock(M) remove_lock(M.freebuffer)
+    start = time_ns()
     id_cleaned = false
 
     while true
@@ -412,6 +414,7 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
             break
         end
     end
+    push!(TIMES, time_ns() - start)
     return id_cleaned
 end
 

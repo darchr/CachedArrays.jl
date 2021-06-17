@@ -7,6 +7,14 @@ const STATE_CHANGES = [
     :writable,
     :release
 ]
+#
+# TODO: More generic treatment of wrapper types.
+maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
+maybesuper(::T) where {T} = T
+
+_maybesuper(x::T) where {T} = T
+_maybesuper(x::T, ::Any, y...) where {T} = _maybesuper(x, y...)
+_maybesuper(x::T, ::CachedArray, y...) where {T} = supertype(T)
 
 # TODO: Make no-op in case of no required state change.
 macro wrapper(typ, fields...)
@@ -38,13 +46,23 @@ macro wrapper(typ, fields...)
         end
     end
 
-    overloads = [builder(f) for f in fns]
+    overloads = builder.(fns)
+
+    # Define "maybesuper" for this type as well.
+    accessors = [:(getproperty(x, $field)) for field in fields]
+    _f = esc(:(CachedArrays.maybesuper))
+    maybesuper = quote
+        $_f(x::$(esc(typ))) = _maybesuper(x, $(accessors...))
+    end
+
     return quote
         $(overloads...)
+        $maybesuper
     end
 end
 
 @wrapper LinearAlgebra.Transpose parent
+@wrapper Base.ReshapedArray parent
 
 #####
 ##### @annotate
@@ -54,11 +72,6 @@ end
 macro annotate(fn)
     return annotate_impl(fn)
 end
-
-# TODO: More generic treatment of wrapper types.
-maybesuper(::T) where {T <: LinearAlgebra.Transpose{<:Any,<:CachedArray}} = supertype(T)
-maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
-maybesuper(::T) where {T} = T
 
 const CACHEDARRAY_KEYWORDS = [
     "prefetch!",
@@ -139,7 +152,7 @@ function annotate_impl(fn)
             end
         end
 
-        # Default behavior - no modification.
+        # Default - no modification.
         return x
     end
 

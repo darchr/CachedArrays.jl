@@ -18,5 +18,4 @@ getpool(A::AbstractMetadata) = error("Implement `getpool`!")
 Return either `nothing` or an instance ot `T` the sibling of `A`.
 """
 getsibling(A::AbstractMetadata) = error("Implement `getsibling`!")
-
 setsibling!(A::T, B::T) where {T <: AbstractMetadata} = error("Implement `setsibling!`")

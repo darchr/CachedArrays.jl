@@ -4,7 +4,7 @@ function gctest(manager)
 
     len = 1024
     B = rand(Float32, len)
-    A = CachedArray{Float32}(undef, manager, len)
+    A = CachedArray{Float32}(undef, manager, len; status = CachedArrays.ReadWrite())
 
     @test isa(A, CachedArray)
     # Test assignment works
@@ -37,7 +37,6 @@ function gctest(manager)
 
     # The cache maanger should now have this array stored at both locations.
     @test CachedArrays.inlocal(manager, A)
-
     @test CachedArrays.inremote(manager, A)
     return nothing
 end
@@ -67,8 +66,8 @@ end
 
         # Okay, now start doing some operations on arrays.
         len = 2_000_000
-        A = CachedArray{Float32}(undef, manager, len)
-        B = CachedArray{Float32}(undef, manager, len)
+        A = CachedArray{Float32}(undef, manager, len; status = CachedArrays.ReadWrite())
+        B = CachedArray{Float32}(undef, manager, len; status = CachedArrays.ReadWrite())
 
         vA = rand(Float32, len)
         vB = rand(Float32, len)
@@ -90,9 +89,9 @@ end
         @test CachedArrays.inlocal(manager, C)
 
         # Now do some timing to make sure the overhead of CachedArrays isn't stupid.
-        f!(C,A,B) = C .= A .+ B
-        f!(C,A,B)
-        @test (@allocated f!(C,A,B)) == 0
+        f!(C, A, B) = C .= A .+ B
+        f!(C, A, B)
+        @test (@allocated f!(C, A, B)) == 0
     end
 end
 

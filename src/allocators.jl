@@ -22,9 +22,7 @@ function allocate(allocator::MmapAllocator, sz)
 end
 
 # Let the Mmap finalizer do its thing
-function free(::MmapAllocator, _)
-    return nothing
-end
+free(::MmapAllocator, _) = nothing
 
 #####
 ##### DRAM Allocator

@@ -21,6 +21,11 @@ import SIMD
 import MacroTools
 import TimerOutputs
 
+# Import "constructorof" to allow external modules to extend "constructorof" without
+# directly invoking "ConstructablesBase'.
+# Of course, that's what's ultimately happening, but this is just cleaner.
+import ConstructionBase: constructorof
+
 # Control whether asserts are active
 # Default to `true` for now because of development
 const DEBUG = true
@@ -70,7 +75,8 @@ else
 end
 
 # This turns out to be surprisingly useful ...
-donothing(x...) = nothing
+donothing(x...; kw...) = nothing
+alwaysfalse(x...; kw...) = false
 
 #####
 ##### includes
@@ -79,9 +85,7 @@ donothing(x...) = nothing
 # Bootstrap Utilities
 include("utils/utils.jl")
 include("utils/findnexttree.jl")
-include("utils/threading.jl")
 include("utils/freebuffer.jl")
-alwaysfalse(x...; kw...) = false
 
 include("allocators.jl")
 include("metadata.jl")
@@ -93,8 +97,8 @@ include("memory/memory.jl")
 include("policy/policy.jl")
 
 # Implementation of the arrays and cache manager
-include("heapmanager.jl")
-include("cachemanager.jl")
+include("managers/heapmanager.jl")
+include("managers/cachemanager.jl")
 include("telemetry/telemetry.jl")
 
 # Array Implementstions
@@ -120,7 +124,7 @@ include("lib.jl")
 const GlobalManagers = CacheManager[]
 
 # Any allocators NOT attached to a CacheManager will be put here.
-# TODO: Allocator cleanup.
+# TODO: Allocator cleanup ...
 const GlobalHeaps = Any[]
 
 function gc_managers()

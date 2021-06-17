@@ -71,7 +71,7 @@ address(x::Block) = convert(UInt, pointer(x))
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 
 struct BlockMeta end
-metadata(x, ::BlockMeta) = unsafe_block(pointer(x))
+metadata(x, ::BlockMeta) = unsafe_block(unsafe_pointer(x))
 
 # Reserved room in for each allocation.
 headersize() = 64

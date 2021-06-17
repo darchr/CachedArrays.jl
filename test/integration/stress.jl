@@ -17,7 +17,7 @@ function epoch(
         nelements = ceil(Int, size / sizeof(Float32))
         reference = randn(Float32, nelements)
         cached_array = CachedArrays.CachedArray{Float32}(undef, manager, nelements)
-        cached_array .= reference
+        CachedArrays.writable(cached_array) .= reference
         push!(arrays, ArrayPairWithLifetime(lifetime, cached_array, reference))
     end
 
@@ -31,7 +31,7 @@ function epoch(
     for pair in arrays
         turns_left = pair.turns_left
         if iszero(turns_left)
-            @test pair.cached_array == pair.reference
+            @test CachedArrays.readable(pair.cached_array) == pair.reference
             push!(arrays_to_delete, pair)
         else
             pair.turns_left -= 1
