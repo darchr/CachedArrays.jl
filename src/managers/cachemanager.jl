@@ -27,6 +27,12 @@ cleanup(region::Region) = cleanup(manager(region), pointer(region))
 metastyle(::Region) = BlockMeta()
 manager(region::Region) = region.manager
 
+"""
+$(TYPEDSIGNATURES)
+
+Allocate `bytes` from `regions`'s manager.
+If `id` is not given, it will be selected automatically.
+"""
 function alloc(region::Region, bytes::Integer, id = getid(region.manager))
     ptr = @spinlock alloc_lock(manager(region)) unsafe_alloc(manager(region), bytes, id)
     return Region(ptr, manager(region))
@@ -83,6 +89,11 @@ mutable struct CacheManager{C,T}
     telemetry::T
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Returns the allocation lock for `manager` without acquiring it.
+"""
 alloc_lock(manager::CacheManager) = manager.alloc_lock
 
 function CacheManager(
@@ -268,6 +279,16 @@ getobjects(::RemotePool, M::CacheManager) = M.remote_objects
 adjust_size!(::LocalPool, M::CacheManager, x) = (M.size_of_local += x)
 adjust_size!(::RemotePool, M::CacheManager, x) = (M.size_of_remote += x)
 
+"""
+$(TYPEDSIGNATURES)
+
+Register `allocated_pointer` and `backedge` with `manager`.
+Argument `allocated_pointer` must come from a heap owned by `manager` and `backedge` must
+point to the `Region` (i.e. mutable struct) holding `allocated_pointer`.
+
+The best way to obtain `backedge` is `Base.pointer_from_objref(region)` where
+`region::Region`.
+"""
 function register!(
     manager::CacheManager,
     backedge::Backedge,
@@ -289,26 +310,33 @@ function register!(
     return nothing
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Register `block` and `backedge` to `pool` in `manager`.
+`block` must have been allocated from the corresponding `pool` and `backedge` must point
+to the `Region` holding the pointer associated with `block`.
+"""
 function unsafe_register!(
     pool::PoolType{T},
-    M::CacheManager,
+    manager::CacheManager,
     block::Block,
     backedge::Backedge,
 ) where {T}
-    @requires alloc_lock(M)
+    @requires alloc_lock(manager)
     @check block.pool == T
     id = getid(block)
-    objects = getobjects(pool, M)
+    objects = getobjects(pool, manager)
     @check !haskey(objects, id)
 
     # Add to data structures
     #
     # If adding to Local, also add this block to the eviction policy
     if T == Local
-        push!(M.policy, block)
+        push!(manager.policy, block)
     end
     objects[id] = backedge
-    adjust_size!(pool, M, length(block))
+    adjust_size!(pool, manager, length(block))
     return nothing
 end
 
@@ -529,7 +557,6 @@ end
 #
 # Try to ultimately convert an object to a pointer to the start of the user accessible
 # data region.
-free_convert(x::Array) = pointer(x)
 free_convert(x::Ptr) = convert(Ptr{Nothing}, x)
 free_convert(x::Block) = datapointer(x)
 
@@ -542,10 +569,30 @@ function free(::RemotePool, manager::CacheManager, ptr::Ptr{Nothing})
 end
 
 # Eviction entry point
+"""
+$(TYPEDSIGNATURES)
+
+Safely try to free `bytes` bytes from the fast memory in `manager`.
+Keyword argument `canabort` is zero-argument a callback returning `true` if it is safe
+to abort the eviction procedure potentially before all space has been cleared.
+
+NOTE: `manager`'s allocation lock (`alloc_lock(manager)`) must be held before this
+function is called.
+"""
 function doeviction!(manager::CacheManager, bytes; canabort::F = alwaysfalse) where {F}
     @spinlock remove_lock(manager.freebuffer) unsafe_eviction!(manager, bytes; canabort)
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Similar to [`doeviction!`](@ref) but assumes that both `alloc_lock(manager)` and
+`remove_lock(manager.freebuffer)` are held.
+
+Try to free `bytes` bytes from the fast memory in `manager`.
+Keyword argument `canabort` is zero-argument a callback returning `true` if it is safe
+to abort the eviction procedure potentially before all space has been cleared.
+"""
 function unsafe_eviction!(manager::CacheManager, bytes; canabort::F = alwaysfalse) where {F}
     @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
@@ -591,7 +638,7 @@ function moveto!(
 
     # If the data is already local, mark a usage and return.
     if getpool(block) == Local
-        # TODO: Fix
+        # TODO: Fix me!
         #update!(PoolType{Local}(), M, A)
         return nothing
     end

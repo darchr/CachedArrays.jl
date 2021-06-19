@@ -7,17 +7,20 @@ const STATE_CHANGES = [
     :writable,
     :release
 ]
-#
-# TODO: More generic treatment of wrapper types.
+
+# Helper functions for when we need to recurse using "Base.invoke"
 maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
 maybesuper(::T) where {T} = T
 
+# Helper function for dealing with wrapper types.
+# The wrapper type's `maybesuper` method gets defined by the `@wrapper` macro below.
 _maybesuper(x::T) where {T} = T
 _maybesuper(x::T, ::Any, y...) where {T} = _maybesuper(x, y...)
 _maybesuper(x::T, ::CachedArray, y...) where {T} = supertype(T)
 
 # TODO: Make no-op in case of no required state change.
 macro wrapper(typ, fields...)
+    typ = esc(typ)
     if isa(fields[1], Expr)
         expr = fields[1]
         fields = fields[2:end]
@@ -40,7 +43,7 @@ macro wrapper(typ, fields...)
         accessors = [:($f(getproperty(x, $field))) for field in fields]
         nt = :(NamedTuple{($(fields...),)}(($(accessors...),)))
         return quote
-            function $f(x::$(esc(typ)))
+            function $f(x::$typ)
                 return ConstructionBase.setproperties(x, $nt)
             end
         end
@@ -52,7 +55,7 @@ macro wrapper(typ, fields...)
     accessors = [:(getproperty(x, $field)) for field in fields]
     _f = esc(:(CachedArrays.maybesuper))
     maybesuper = quote
-        $_f(x::$(esc(typ))) = _maybesuper(x, $(accessors...))
+        $_f(x::$typ) = _maybesuper(x, $(accessors...))
     end
 
     return quote

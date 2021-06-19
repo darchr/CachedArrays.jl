@@ -21,6 +21,9 @@ import SIMD
 import MacroTools
 import TimerOutputs
 
+# DocString Helper
+using DocStringExtensions
+
 # Import "constructorof" to allow external modules to extend "constructorof" without
 # directly invoking "ConstructablesBase'.
 # Of course, that's what's ultimately happening, but this is just cleaner.
