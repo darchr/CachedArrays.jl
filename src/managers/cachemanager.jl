@@ -407,6 +407,7 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
             # be an error.
             id == getid(block) && (id_cleaned = true)
             @telemetry M telemetry_gc(gettelemetry(M), getid(block))
+
             pool = getpool(block)
             if pool == Remote
                 @check getsibling(block) === nothing
