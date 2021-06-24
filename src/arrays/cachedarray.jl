@@ -52,10 +52,6 @@ end
 CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
 
 function CachedArray{T,N}(x::Array{T,N}, manager; status = NotBusy()) where {T,N}
-    # Make sure we don't catch an interrupt between asking for an allocation and then
-    # finishing.
-    #
-    # TODO: Maybe extend the allocation API to handle this automatically ...
     region = alloc(manager, sizeof(x))
     unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
     return CachedArray{T,N}(region, size(x), status)
@@ -65,8 +61,12 @@ function CachedArray{T}(::UndefInitializer, manager, i::Integer...; kw...) where
     return CachedArray{T}(undef, manager, convert.(Int, i); kw...)
 end
 
-function CachedArray{T}(::UndefInitializer, manager, dims::NTuple{N,Int}; status = NotBusy()) where {T,N}
-    isbitstype(T) || error("Can only create CachedArrays of `isbitstypes`!")
+function CachedArray{T}(
+    ::UndefInitializer,
+    manager,
+    dims::NTuple{N,Int};
+    status = NotBusy(),
+) where {T,N}
     region = alloc(manager, prod(dims) * sizeof(T))
     return CachedArray{T,N}(region, dims, status)
 end
@@ -83,12 +83,12 @@ Base.sizeof(A::CachedArray) = prod(size(A)) * sizeof(eltype(A))
 Base.elsize(::CachedArray{T}) where {T} = sizeof(T)
 Base.elsize(::Type{<:CachedArray{T}}) where {T} = sizeof(T)
 
-function Base.getindex(A::CachedArray{<:Any,<:Any,S}, i::Int) where {S<:Readable}
+function Base.getindex(A::ReadableCachedArray, i::Int)
     @boundscheck checkbounds(A, i)
     return LoadStore.unsafe_custom_load(pointer(A), i)
 end
 
-function Base.setindex!(A::CachedArray{<:Any,<:Any,S}, v, i::Int) where {S<:Writable}
+function Base.setindex!(A::WritableCachedArray, v, i::Int)
     @boundscheck checkbounds(A, i)
     return LoadStore.unsafe_custom_store!(pointer(A), v, i)
 end
@@ -104,7 +104,7 @@ function Base.similar(
     CachedArray{T}(undef, manager(A), dims; status = status)
 end
 
-function Base.iterate(A::CachedArray{<:Any,<:Any,S}, i::Int = 1) where {S<:Readable}
+function Base.iterate(A::ReadableCachedArray, i::Int = 1)
     i > length(A) && return nothing
     return (@inbounds A[i], i + 1)
 end
@@ -112,12 +112,10 @@ end
 # For alias detection
 Base.dataids(A::CachedArray) = (UInt(pointer(A)),)
 
-function Base.reshape(
-    x::CachedArray{T,M,S},
-    dims::NTuple{N,Int},
-) where {T,N,M,S}
-    throw_dmrsa(dims, len) =
-        throw(DimensionMismatch("new dimensions $(dims) must be consistent with array size $len"))
+function Base.reshape(x::CachedArray{T,M,S}, dims::NTuple{N,Int}) where {T,N,M,S}
+    throw_dmrsa(dims, len) = throw(
+        DimensionMismatch("new dimensions $(dims) must be consistent with array size $len"),
+    )
 
     if prod(dims) != length(x)
         throw_dmrsa(dims, length(x))
@@ -167,20 +165,6 @@ function Base.similar(
     return similar(cached, ElType, axes(bc))
 end
 
-# We need to search through the `bc` object for the first instance of T
-# Once we find it, return it.
-findT(::Type{T}, bc::Base.Broadcast.Broadcasted) where {T} = findT(T, bc.args)
-findT(::Type{T}, x::Tuple) where {T} = findT(T, findT(T, first(x)), Base.tail(x))
-findT(::Type{T}, x::U) where {T,U<:T} = x
-findT(::Type{T}, x::SubArray{<:Any,<:Any,U}) where {T,U<:T} = findT(T, parent(x))
-findT(::Type{T}, x) where {T} = nothing
-findT(::Type{T}, ::Tuple{}) where {T} = nothing
-findT(::Type{T}, x::U, rest) where {T,U<:T} = x
-findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
-
-# We hit this case when there's Float32/Float64 confusion ...
-findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T,U<:T} = x.x
-
 #####
 ##### ArrayInterface
 #####
@@ -191,47 +175,59 @@ ArrayInterface.defines_strides(::Type{<:CachedArray}) = true
 ArrayInterface.can_avx(::CachedArray) = true
 
 # Axes
-ArrayInterface.axes_types(::Type{<:CachedArray{T,N}}) where {T,N} =
-    Tuple{Vararg{Base.OneTo{Int},N}}
+function ArrayInterface.axes_types(::Type{<:CachedArray{T,N}}) where {T,N}
+    return Tuple{Vararg{Base.OneTo{Int},N}}
+end
 ArrayInterface.contiguous_axis(::Type{<:CachedArray}) = ArrayInterface.One()
-ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N} =
-    ArrayInterface.nstatic(Val(N))
-ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N} =
-    ArrayInterface.Zero()
-ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N} =
-    ArrayInterface._all_dense(Val{N}())
+function ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N}
+    return ArrayInterface.nstatic(Val(N))
+end
+function ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N}
+    return ArrayInterface.Zero()
+end
+function ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N}
+    return ArrayInterface._all_dense(Val{N}())
+end
 
 ArrayInterface.device(::Type{<:CachedArray}) = ArrayInterface.CPUPointer()
 
 #####
-##### State Changes
+##### Conversion Functions
 #####
 
-# N.B. - Once state tracking is implemented in the backend, make sure to use semaphores
-# since it's conceivable that multiple sections of code could be working with an array at
-# a time.
-#
-# We could even go crazy and implement Rust like semantics about mutable and immutable
-# copies (albeit much less strictly enforced on the compiler level)
-readable(x::CachedArray{T,N,S}) where {T,N,S<:Readable} = x
-function readable(x::CachedArray{T,N,S}) where {T,N,S}
-    return CachedArray{T,N}(region(x), size(x), ReadOnly())
+const __fnmap = [
+    :NotBusy => :release,
+    :ReadOnly => :readable,
+    :ReadWrite => :writable,
+]
+
+for (typ, fn) in __fnmap
+    # No-op if already correct type.
+    @eval function $fn(x::CachedArray{T,N,$typ}) where {T,N}
+        return x
+    end
+
+    # Adjust type parameter.
+    @eval function $fn(x::CachedArray{T,N,S}) where {T,N,S}
+        # Optional Telemetry
+        @telemetry manager(x) begin
+            telemetry_change(
+                gettelemetry(manager(x)),
+                getid(metadata(x)),
+                $(QuoteNode(typ)),
+                Symbol(S),
+            )
+        end
+        return CachedArray{T,N}(region(x), size(x), $typ())
+    end
+
+    # Define `Base.convert` in terms of the "release, readable, writable" methods
+    # defined above.
+    @eval function Base.convert(
+        ::Type{CachedArray{T,N,$typ,M}},
+        x::CachedArray{T,N,S,M},
+    ) where {T,N,S,M}
+        return $fn(x)
+    end
 end
 
-writable(x::CachedArray{T,N,S}) where {T,N,S<:Writable} = x
-function writable(x::CachedArray{T,N,S}) where {T,N,S}
-    return CachedArray{T,N}(region(x), size(x), ReadWrite())
-end
-
-# The behavior of these two is the same for the time being.
-readwrite(x::CachedArray) = writable(x)
-
-release(x::CachedArray{T,N,NotBusy}) where {T,N} = x
-function release(x::CachedArray{T,N,S}) where {T,N,S}
-    return CachedArray{T,N}(region(x), size(x), NotBusy())
-end
-
-# Automatic Conversion.
-function Base.convert(::Type{CachedArray{T,N,NotBusy,M}}, x::CachedArray{T,N,S,M}) where {T,N,S,M}
-    return release(x)
-end

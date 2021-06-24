@@ -49,3 +49,18 @@ macro requires(locks...)
         end
     end
 end
+
+# We need to search through the `bc` object for the first instance of T
+# Once we find it, return it.
+findT(::Type{T}, bc::Base.Broadcast.Broadcasted) where {T} = findT(T, bc.args)
+findT(::Type{T}, x::Tuple) where {T} = findT(T, findT(T, first(x)), Base.tail(x))
+findT(::Type{T}, x::U) where {T,U<:T} = x
+findT(::Type{T}, x::SubArray{<:Any,<:Any,U}) where {T,U<:T} = findT(T, parent(x))
+findT(::Type{T}, x) where {T} = nothing
+findT(::Type{T}, ::Tuple{}) where {T} = nothing
+findT(::Type{T}, x::U, rest) where {T,U<:T} = x
+findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
+
+# We hit this case when there's Float32/Float64 confusion ...
+findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T,U<:T} = x.x
+

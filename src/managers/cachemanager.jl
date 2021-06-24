@@ -183,25 +183,6 @@ function telemetry_gc end
 function telemetry_change end
 
 #####
-##### Policy Hints
-#####
-
-# Marking a block as dirty both notifies the policy and sets the objects metadata.
-setdirty!(A, flag::Bool = true) = setdirty!(A, manager(A), flag)
-setdirty!(A, M::CacheManager, flag) = setdirty!(metadata(A), M, flag)
-
-function setdirty!(block::Block, M::CacheManager, flag)
-    # Only need to worry about updating the state of the block and the policy if
-    # this particular object lives in Local
-    if getpool(block) == Local
-        setdirty!(block, flag)
-        # TODO: Enforce synchronization.
-        setdirty!(M.policy, block, flag)
-    end
-    return nothing
-end
-
-#####
 ##### Enable/Disable movement
 #####
 
