@@ -162,6 +162,16 @@ function CacheManager(
 end
 
 #####
+##### Policy
+#####
+
+@inline function setdirty!(manager::CacheManager, block::Block, flag = true)
+    return setdirty!(manager.policy, block, flag)
+end
+
+update!(manager::CacheManager, block::Block) = update!(manager.policy, block)
+
+#####
 ##### Telemetry
 #####
 
@@ -770,7 +780,9 @@ function check(manager::CacheManager)
         end
     end
     if manager.size_of_remote != size_allocated
-        println("Manager and heap Remote objects size mismatch. Manager sees: $(manager.size_of_remote). Heap sees: $size_allocated.")
+        println(
+            "Manager and heap Remote objects size mismatch. Manager sees: $(manager.size_of_remote). Heap sees: $size_allocated.",
+        )
         passed = false
     end
 
@@ -787,18 +799,24 @@ function check(manager::CacheManager)
         end
     end
     if manager.size_of_local != size_allocated
-        println("Manager and heap Local objects size mismatch. Manager sees: $(manager.size_of_local). Heap sees: $size_allocated.")
+        println(
+            "Manager and heap Local objects size mismatch. Manager sees: $(manager.size_of_local). Heap sees: $size_allocated.",
+        )
         println("    Manager IDS: $(Int.(sort(collect(keys(manager.local_objects)))))")
         println("    Heap IDS: $(Int.(sort(collect(seen_ids))))")
         passed = false
     end
 
     if !issubset(seen_ids, keys(manager.local_objects))
-        println("Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))")
+        println(
+            "Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))",
+        )
         passed = false
     end
     if !issubset(keys(manager.local_objects), seen_ids)
-        println("Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))")
+        println(
+            "Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))",
+        )
         passed = false
     end
 

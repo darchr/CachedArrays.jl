@@ -85,13 +85,15 @@ alwaysfalse(x...; kw...) = false
 ##### includes
 #####
 
+include("api.jl")
+
 # Bootstrap Utilities
 include("utils/utils.jl")
 include("utils/findnexttree.jl")
 include("utils/freebuffer.jl")
 
 include("allocators.jl")
-include("metadata.jl")
+#include("metadata.jl")
 
 # Heap implementations
 include("memory/memory.jl")

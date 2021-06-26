@@ -8,12 +8,13 @@
 
     # Transitions
     ReadTransition
-    ReadTransitionNoop
     WriteTransition
-    WriteTransitionNoop
     ReleaseTransition
-    ReleaseTransitionNoop
     TransitionUnknown
+
+    # Movement
+    MoveToLocal
+    MoveToRemote
 
     # Cleanup
     GarbageCollected
@@ -26,11 +27,18 @@ struct TelemetryRecord
     action::TelemetryAction
 end
 
+struct AllocationRecord
+    id::UInt
+    size::Int
+    basepointer::UInt
+end
+
 const BacktraceType = Vector{Union{Ptr{Nothing},Base.InterpreterIP}}
 
 struct Telemetry
     # Map allocated IDs to their sequence of actions.
     logs::Dict{UInt, Vector{TelemetryRecord}}
+    objects::Dict{UInt, AllocationRecord}
     backtraces::Vector{BacktraceType}
     lock::Base.Threads.SpinLock
 end
@@ -38,6 +46,7 @@ end
 function Telemetry()
     return Telemetry(
         Dict{UInt, Vector{TelemetryRecord}}(),
+        Dict{UInt, AllocationRecord}(),
         Vector{BacktraceType}(),
         Base.Threads.SpinLock(),
     )
@@ -79,7 +88,9 @@ function telemetry_alloc(telemetry::Telemetry, manager, bytes, id, ptr, location
     # If this is a new location, mark it as such.
     bt = backtrace()
     backtraces = telemetry.backtraces
+    allocation_record = AllocationRecord(id, bytes, UInt(ptr))
     @spinlock telemetry.lock begin
+        telemetry.objects[id] = allocation_record
         key = findfirst(isequal(bt), backtraces)
         if key === nothing
             push!(backtraces, bt)
@@ -106,11 +117,11 @@ function telemetry_change(telemetry::Telemetry, id, from, to)
     now = time_ns()
     state = TransitionUnknown
     if to == :ReadOnly
-        state = (from == :ReadOnly) ? ReadTransitionNoop : ReadTransition
+        state = ReadTransition
     elseif to == :ReadWrite
-        state = (from == :ReadWrite) ? WriteTransitionNoop : WriteTransition
+        state = WriteTransition
     elseif to == :NotBusy
-        state = (from == :NotBusy) ? ReleaseTransitionNoop : ReleaseTransition
+        state = ReleaseTransition
     end
 
     # Find where we are on the stack.
@@ -139,7 +150,7 @@ function allocation_ids(telemetry::Telemetry)
     # Keep track of both the keys as well as the earliest access time so we can
     # reconstruct the call graph in some kind of ordered manner.
     #
-    # Though to be honest, this will probably be equivalend to just straight up sorting
+    # Though to be honest, this will probably be equivalent to just straight up sorting
     # the keys ...
     keys = Dict{Int,UInt}()
     for log in values(telemetry.logs)

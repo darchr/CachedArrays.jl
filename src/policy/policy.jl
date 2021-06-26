@@ -15,4 +15,3 @@ cheapevict(x, meta) = nothing
 
 include("lru.jl")
 include("random.jl")
-include("select.jl")

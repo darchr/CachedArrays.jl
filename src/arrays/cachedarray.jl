@@ -201,14 +201,28 @@ const __fnmap = [
     :ReadWrite => :writable,
 ]
 
+const __updates = Dict(
+    # Implications of making an array notbusy.
+    # 1. TODO:
+    :release => [],
+    # Implications of making an array readable.
+    # 1. TODO: Usage should be updated
+    :readable => [],
+    # Implications of making an array writable.
+    # 1. Array should be marked as dirty.
+    # 2. TODO: Usage should be updated
+    :writable => [
+        :(setdirty!(x)),
+    ],
+)
+
 for (typ, fn) in __fnmap
     # No-op if already correct type.
     @eval function $fn(x::CachedArray{T,N,$typ}) where {T,N}
         return x
     end
 
-    # Adjust type parameter.
-    @eval function $fn(x::CachedArray{T,N,S}) where {T,N,S}
+    @eval function $fn(x::CachedArray{T,N}) where {T,N}
         # Optional Telemetry
         @telemetry manager(x) begin
             telemetry_change(
@@ -218,6 +232,8 @@ for (typ, fn) in __fnmap
                 Symbol(S),
             )
         end
+        # unpack any potential policy updates.
+        $(__updates...)
         return CachedArray{T,N}(region(x), size(x), $typ())
     end
 
