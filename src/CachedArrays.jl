@@ -17,6 +17,8 @@ import Random
 import ArrayInterface
 import ConstructionBase
 import DataStructures
+import JSON
+import Polyester
 import SIMD
 import MacroTools
 import TimerOutputs
@@ -104,7 +106,6 @@ include("policy/policy.jl")
 # Implementation of the arrays and cache manager
 include("managers/heapmanager.jl")
 include("managers/cachemanager.jl")
-include("telemetry/telemetry.jl")
 
 # Array Implementstions
 include("llvm.jl")
@@ -112,6 +113,7 @@ using .LoadStore: LoadStore
 
 include("arrays/cachedarray.jl")
 include("arrays/heaparray.jl")
+include("telemetry/telemetry.jl")
 
 # Fast "memcpy"
 include("memcpy.jl")

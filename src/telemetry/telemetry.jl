@@ -141,6 +141,16 @@ function telemetry_change(telemetry::Telemetry, id, from, to)
     return nothing
 end
 
+function telemetry_move(telemetry::Telemetry, id, location, bytes)
+    action = location == Local ? MoveToLocal : MoveToRemote
+    record = TelemetryRecord(time_ns(), 0, action)
+    @spinlock telemetry.lock begin
+        # Log should exist, so don't get fancy trying to allocate it.
+        push!(telemetry.logs[id], record)
+    end
+    return nothing
+end
+
 #####
 ##### Analysis Passes
 #####
@@ -211,3 +221,70 @@ function estimate_lifetime(library::Vector{TelemetryRecord})
     end
 end
 
+#####
+##### Save Telemetry
+#####
+
+# Custom JSON serialization for Telemetry
+struct TelemetrySerialization <: JSON.CommonSerialization end
+
+function JSON.lower(x::Telemetry)
+    return Dict(
+        :logs => x.logs,
+        :objects => x.objects,
+        :backtraces => x.backtraces,
+    )
+end
+
+const SC = JSON.StructuralContext
+
+function JSON.show_json(io::SC, ::TelemetrySerialization, x::BacktraceType)
+    # Step 1: Convert from a vector of pointers to a full on stacktrace.
+    trace = prettify(stacktrace(x))
+    return JSON.show_json(io, TelemetrySerialization(), trace)
+end
+
+function JSON.show_json(io::SC, ::TelemetrySerialization, x::Base.StackTraces.StackFrame)
+    # Don't worry about macrto expansions.
+    if x.func == Symbol("macro expansion")
+        return nothing
+    end
+
+    dict = Dict(
+        :func => x.func,
+        :file => x.file,
+        :line => x.line,
+        :linfo => x.linfo
+    )
+    return JSON.show_json(io, TelemetrySerialization(), dict)
+end
+
+# Make type printing a little less heinous
+tostring(x) = string(x)
+function tostring(x::DataType)
+    if isempty(x.parameters)
+        return string(x)
+    else
+        inner = join(tostring.(x.parameters), ", ")
+        return "$(x.name.module).$(x.name.name){$inner}"
+    end
+end
+
+function tostring(::Type{NamedTuple{names,T}}) where {names,T}
+    return "NamedTuple{$names, $(tostring(T))}"
+end
+tostring(::Type{<:CachedArray{T,N}}) where {T,N} = "CachedArray{$T,$N}"
+
+# Top level save functions
+function JSON.show_json(io::SC, ::TelemetrySerialization, x::Core.MethodInstance)
+    return JSON.show_json(io, JSON.StandardSerialization(), tostring.(x.specTypes.parameters))
+end
+
+function save_trace(file::AbstractString, x::Telemetry)
+    open(io -> save_trace(io, x), file; write = true)
+end
+
+function save_trace(io::IO, x::Telemetry)
+    return JSON.show_json(io, TelemetrySerialization(), x; indent = 4)
+    #return JSON.show_json(io, TelemetrySerialization(), x)
+end

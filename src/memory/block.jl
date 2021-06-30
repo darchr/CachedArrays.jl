@@ -227,13 +227,15 @@ function Base.show(io::IO, block::Block)
     # Display the free attributes of the block
     if isfree(block)
         printstyled(io, "Free\n"; color = :green)
-        println(io, "    Pool: ", block.pool)
         println(io, "    Next: 0x", string(address(block.next); base = 16))
         println(io, "    Previous: 0x", string(address(block.previous); base = 16))
     else
         printstyled(io, "Taken\n"; color = :red)
         println(io, "    Pool: ", block.pool)
         println(io, "    ID: ", block.id)
+        println(io, "    Dirty: ", block.dirty)
+        println(io, "    Evicting: ", block.evicting)
+        println(io, "    Orphaned: ", block.orphaned)
         println(io, "    Sibling: 0x", string(address(block.sibling); base = 16))
     end
 end

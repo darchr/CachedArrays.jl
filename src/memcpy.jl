@@ -162,7 +162,7 @@ function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)
     # Now, deal with the specified nmber of threads
     bytes_per_chunk, last_chunk = aligned_chunk(bytes, nthreads)
 
-    @timeit "Moving Data" Threads.@threads for i in 1:nthreads
+    @timeit "Moving Data" Polyester.@batch per=core for i in Base.OneTo(nthreads)
         offset = bytes_per_chunk * (i-1)
         copybytes = (i == nthreads) ? last_chunk : bytes_per_chunk
         unsafe_memcpy!(+, dest + offset, src + offset, copybytes)

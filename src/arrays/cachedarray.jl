@@ -3,6 +3,10 @@ struct NotBusy <: AbstractStatus end
 struct ReadOnly <: AbstractStatus end
 struct ReadWrite <: AbstractStatus end
 
+_sym(::Type{NotBusy}) = :NotBusy
+_sym(::Type{ReadOnly}) = :ReadOnly
+_sym(::Type{ReadWrite}) = :ReadWrite
+
 const Readable = Union{ReadOnly,ReadWrite}
 const Writable = ReadWrite
 
@@ -51,7 +55,12 @@ end
 
 CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
 
-function CachedArray{T,N}(x::Array{T,N}, manager; status = NotBusy()) where {T,N}
+function CachedArray{T,N}(
+    x::Array{T,N},
+    manager;
+    status = NotBusy(),
+    priority = PreferLocal,
+) where {T,N}
     region = alloc(manager, sizeof(x))
     unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
     return CachedArray{T,N}(region, size(x), status)
@@ -66,8 +75,9 @@ function CachedArray{T}(
     manager,
     dims::NTuple{N,Int};
     status = NotBusy(),
+    priority = PreferLocal,
 ) where {T,N}
-    region = alloc(manager, prod(dims) * sizeof(T))
+    region = alloc(manager, prod(dims) * sizeof(T), priority)
     return CachedArray{T,N}(region, dims, status)
 end
 
@@ -100,8 +110,9 @@ function Base.similar(
     eltyp::Type{T} = eltype(A),
     dims::Tuple{Vararg{Int,N}} = size(A);
     status = ReadWrite(),
+    priority = PreferLocal,
 ) where {T,N}
-    CachedArray{T}(undef, manager(A), dims; status = status)
+    CachedArray{T}(undef, manager(A), dims; status = status, priority = priority)
 end
 
 function Base.iterate(A::ReadableCachedArray, i::Int = 1)
@@ -195,11 +206,7 @@ ArrayInterface.device(::Type{<:CachedArray}) = ArrayInterface.CPUPointer()
 ##### Conversion Functions
 #####
 
-const __fnmap = [
-    :NotBusy => :release,
-    :ReadOnly => :readable,
-    :ReadWrite => :writable,
-]
+const __fnmap = [:NotBusy => :release, :ReadOnly => :readable, :ReadWrite => :writable]
 
 const __updates = Dict(
     # Implications of making an array notbusy.
@@ -211,9 +218,7 @@ const __updates = Dict(
     # Implications of making an array writable.
     # 1. Array should be marked as dirty.
     # 2. TODO: Usage should be updated
-    :writable => [
-        :(setdirty!(x)),
-    ],
+    :writable => [:(setdirty!(x))],
 )
 
 for (typ, fn) in __fnmap
@@ -222,14 +227,14 @@ for (typ, fn) in __fnmap
         return x
     end
 
-    @eval function $fn(x::CachedArray{T,N}) where {T,N}
+    @eval function $fn(x::CachedArray{T,N,S}) where {T,N,S}
         # Optional Telemetry
         @telemetry manager(x) begin
             telemetry_change(
                 gettelemetry(manager(x)),
                 getid(metadata(x)),
+                _sym(S),
                 $(QuoteNode(typ)),
-                Symbol(S),
             )
         end
         # unpack any potential policy updates.

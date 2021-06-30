@@ -15,7 +15,7 @@
     @test length(manager.local_objects) == 0
     @test length(manager.remote_objects) == 0
 
-    A = CachedArray{UInt8}(undef, manager, (500000,))
+    A = CachedArray{UInt8}(undef, manager, 500000; priority = CachedArrays.ForceLocal)
     # Actual allocation should be within 2^minallocation of the actual size of A
     @test CachedArrays.inlocal(manager, A)
     @test CachedArrays.pool(A) == Local
@@ -29,7 +29,7 @@
     #     )
     # end
 
-    B = CachedArray{UInt8}(undef, manager, (300000,))
+    B = CachedArray{UInt8}(undef, manager, 300000; priority = CachedArrays.ForceLocal)
     @test CachedArrays.inlocal(manager, A)
     @test CachedArrays.inlocal(manager, B)
 
@@ -38,7 +38,7 @@
     @test CachedArrays.pool(B) == Local
 
     # When we insert C, A should be evicted.
-    C = CachedArray{UInt8}(undef, manager, (500000,))
+    C = CachedArray{UInt8}(undef, manager, 500000; priority = CachedArrays.ForceLocal)
 
     @test CachedArrays.inlocal(manager, B)
     @test CachedArrays.inlocal(manager, C)
@@ -78,7 +78,7 @@
     # Now - test that locking movement works correctly.
     # If we disable movement and then allocate a new array, it should be allocated in Remote
     CachedArrays.disable_movement!(manager)
-    D = similar(B)
+    D = similar(B; priority = CachedArrays.ForceLocal)
 
     @test CachedArrays.pool(A) == Local
     @test CachedArrays.pool(B) == Remote
@@ -87,7 +87,7 @@
 
     # If we renable movement - then a new allocation should happen in Local with an evicion.
     CachedArrays.enable_movement!(manager)
-    E = similar(B)
+    E = similar(B; priority = CachedArrays.ForceLocal)
 
     @test CachedArrays.pool(A) == Local
     @test CachedArrays.pool(B) == Remote

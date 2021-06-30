@@ -6,6 +6,8 @@ backedge(x::Backedge) = x
 backedge(x::Ptr) = convert(Backedge, x)
 backedge(x) = backedge(datapointer(x))
 
+@enum AllocationPriority ForceLocal PreferLocal ForceRemote
+
 mutable struct Region{T}
     # TODO: Store the allocation function in the block header to avoid taking space in
     # the region struct?
@@ -33,8 +35,18 @@ $(TYPEDSIGNATURES)
 Allocate `bytes` from `regions`'s manager.
 If `id` is not given, it will be selected automatically.
 """
-function alloc(region::Region, bytes::Integer, id = getid(region.manager))
-    ptr = @spinlock alloc_lock(manager(region)) unsafe_alloc(manager(region), bytes, id)
+function alloc(
+    region::Region,
+    bytes::Integer,
+    priority::AllocationPriority = PreferLocal,
+    id = getid(region.manager),
+)
+    ptr = @spinlock alloc_lock(manager(region)) unsafe_alloc(
+        manager(region),
+        bytes,
+        priority,
+        id,
+    )
     return Region(ptr, manager(region))
 end
 
@@ -81,7 +93,8 @@ mutable struct CacheManager{C,T}
     freebuffer::FreeBuffer{Block}
 
     ## local tunables
-    gc_when_over::Int
+    gc_when_over_local::Int
+    gc_when_over_remote::Int
     abort_callback::AbortCallback{AlignedAllocator}
 
     ## Prevent arrays from moving
@@ -147,6 +160,7 @@ function CacheManager(
 
         # tunables,
         floor(Int, gc_when_over * sizeof(local_heap)),
+        floor(Int, gc_when_over * sizeof(remote_heap)),
         AbortCallback(local_heap, 0),
 
         # runtime settings
@@ -191,6 +205,7 @@ end
 function telemetry_alloc end
 function telemetry_gc end
 function telemetry_change end
+function telemetry_move end
 
 #####
 ##### Enable/Disable movement
@@ -444,16 +459,16 @@ end
 
 # Try to allocate from Local first.
 # Then, try to allocate from Remote
-function alloc(manager::CacheManager, bytes::Int, id::UInt = getid(manager))
-    ptr = @spinlock alloc_lock(manager) unsafe_alloc(manager, bytes, id)
+function alloc(manager::CacheManager, bytes::Int, priority::AllocationPriority = PreferLocal, id::UInt = getid(manager))
+    ptr = @spinlock alloc_lock(manager) unsafe_alloc(manager, bytes, priority, id)
     return Region(ptr, manager)
 end
 
-function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
+function unsafe_alloc(manager::CacheManager, bytes, priority::AllocationPriority, id = getid(manager))
     # Don't bother trying to allocate to the local heap if the requested allocation
     # is bigger than the heap anyways.
-    if bytes <= sizeof(manager.local_heap)
-        ptr = unsafe_alloc(LocalPool(), manager, bytes, id)
+    if bytes <= sizeof(manager.local_heap) && priority != ForceRemote
+        ptr = unsafe_alloc(LocalPool(), manager, bytes, priority, id)
         if ptr !== nothing
             @telemetry manager telemetry_alloc(
                 gettelemetry(manager),
@@ -469,7 +484,14 @@ function unsafe_alloc(manager::CacheManager, bytes, id = getid(manager))
 
     # No free space. Try to allocate from Remote
     ptr = unsafe_alloc(RemotePool(), manager, bytes, id)
-    @telemetry manager telemetry_alloc(manager, bytes, id, ptr, Remote)
+    @telemetry manager telemetry_alloc(
+        gettelemetry(manager),
+        manager,
+        bytes,
+        id,
+        ptr,
+        Remote,
+    )
     return ptr
 end
 
@@ -477,40 +499,48 @@ function unsafe_alloc(
     ::LocalPool,
     manager::CacheManager,
     bytes,
+    priority::AllocationPriority =  PreferLocal,
     id::UInt = getid(manager),
     cleanup_function::F = cleanup,
     eviction_function::G = doeviction!,
 ) where {F,G}
     @requires alloc_lock(manager)
-
     heap = manager.local_heap
+
+    # Try to cleanup the freebuffer.
+    # The cleanup function *may* take an ID, in which case it will return "true" if
+    # the id we're trying to allocate was freed as part of the cleanup process.
+    #
+    # If this is the case, then we simply abort.
     if candrain(manager.freebuffer) && cleanup_function(manager, id)
         return Ptr{Nothing}()
     end
 
-    # See if we should trigger an incremental GC
+    # See if we should heuristically trigger an incremental GC
+    # TODO: Move this to the policy to avoid over-calling `GC.gc()`?
     already_gc = false
-    if manager.size_of_local >= manager.gc_when_over
+    if manager.size_of_local >= manager.gc_when_over_local
         GC.gc(false)
         already_gc = true
     end
 
+    # Try allocating the pointer.
+    # If allocation fails try cleaning up the free buffer.
     ptr = alloc(heap, bytes, id)
+    if priority == ForceLocal
+        if ptr === nothing
+            already_gc || GC.gc(false)
+            candrain(manager.freebuffer) && cleanup_function(manager)
+            ptr = alloc(heap, bytes, id)
+        end
 
-    # If allocation failed, try a GC
-    if ptr === nothing
-        # Trigger full GC, then incremental GC to try to get finalizers to run.
-        already_gc || GC.gc(false)
-        candrain(manager.freebuffer) && cleanup_function(manager)
-        ptr = alloc(heap, bytes, id)
-    end
-
-    if ptr === nothing && manager.allow_movement
-        canabort = manager.abort_callback
-        canabort.bytes = bytes
-
-        eviction_function(manager, bytes; canabort = canabort)
-        ptr = alloc(manager.local_heap, bytes, id)
+        # Still failed, try moving some local objects to remote memory.
+        if ptr === nothing && manager.allow_movement
+            canabort = manager.abort_callback
+            canabort.bytes = bytes
+            eviction_function(manager, bytes; canabort = canabort)
+            ptr = alloc(manager.local_heap, bytes, id)
+        end
     end
 
     return ptr
@@ -527,6 +557,10 @@ function unsafe_alloc(
     @requires alloc_lock(manager)
 
     heap = manager.remote_heap
+    if manager.size_of_remote >= manager.gc_when_over_remote
+        GC.gc(true)
+    end
+
     if candrain(manager.freebuffer)
         # If this block gets cleaned up, then first check if it's okay to abort
         # the eviction operation.
@@ -540,7 +574,6 @@ function unsafe_alloc(
         cleaned && return Ptr{Nothing}()
     end
     ptr = alloc(heap, bytes, id)
-
     ptr === nothing && error("Cannot Allocate from PM")
     return ptr
 end
@@ -620,18 +653,18 @@ moveto!(pool, A, M = manager(A); kw...) = moveto!(pool, metadata(A), M; kw...)
 function moveto!(
     localpool::LocalPool,
     block::Block,
-    M::CacheManager;
+    manager::CacheManager;
     dirty = true,
     write_before_read = false,
 )
-    @requires alloc_lock(M) remove_lock(M.freebuffer)
+    @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
     id = getid(block)
 
     # If the data is already local, mark a usage and return.
     if getpool(block) == Local
         # TODO: Fix me!
-        #update!(PoolType{Local}(), M, A)
+        #update!(PoolType{Local}(), manager, A)
         return nothing
     end
 
@@ -639,8 +672,15 @@ function moveto!(
     @check getsibling(block) === nothing
 
     # Otherwise, we need to allocate some local data for it.
-    storage_ptr =
-        unsafe_alloc(LocalPool(), M, length(block), id, unsafe_cleanup!, unsafe_eviction!)
+    storage_ptr = unsafe_alloc(
+        LocalPool(),
+        manager,
+        length(block),
+        ForceLocal,
+        id,
+        unsafe_cleanup!,
+        unsafe_eviction!,
+    )
 
     # Null pointer returned - corresponding block in Remote has been freed.
     # No need to finish the move.
@@ -663,25 +703,26 @@ function moveto!(
 
     # Check if this block has multiple watchers.
     # If so, update all references to this block.
-    ptr = getobjects(RemotePool(), M)[id]
+    ptr = getobjects(RemotePool(), manager)[id]
     unsafe_store!(ptr, storage_ptr)
-    unsafe_register!(localpool, M, newblock, ptr)
+    unsafe_register!(localpool, manager, newblock, ptr)
 
     # Set the dirty flag.
     # If `write_before_read` is true, then we MUST mark this block as dirty.
     flag = write_before_read | dirty
     setdirty!(newblock, flag)
-    setdirty!(M.policy, newblock, flag)
+    setdirty!(manager.policy, newblock, flag)
+    @telemetry manager telemetry_move(gettelemetry(manager), id, Local, length(block))
     return nothing
 end
 
 function moveto!(
     remotepool::RemotePool,
     block::Block,
-    M::CacheManager;
+    manager::CacheManager;
     canabort = alwaysfalse,
 )
-    @requires alloc_lock(M) remove_lock(M.freebuffer)
+    @requires alloc_lock(manager) remove_lock(manager.freebuffer)
 
     id = getid(block)
     # If already in Remote, do nothing
@@ -694,7 +735,7 @@ function moveto!(
     if createstorage
         storage_ptr = unsafe_alloc(
             remotepool,
-            M,
+            manager,
             length(block),
             id,
             unsafe_cleanup!;
@@ -733,23 +774,24 @@ function moveto!(
     # It's possible the block we just moved has now been queued for deletion.
     # Check that case.
     if isqueued(block)
-        unsafe_cleanup!(M)
+        unsafe_cleanup!(manager)
         # Abort operation
-        free(remotepool, M, sibling)
+        free(remotepool, manager, sibling)
         return canabort() ? true : nothing
     end
 
     # Update back edges
-    ptr = getobjects(LocalPool(), M)[id]
+    ptr = getobjects(LocalPool(), manager)[id]
     unsafe_store!(ptr, storage_ptr)
-    createstorage && unsafe_register!(remotepool, M, sibling, ptr)
+    createstorage && unsafe_register!(remotepool, manager, sibling, ptr)
 
     # Deregister this object from local tracking.
-    unsafe_unregister!(LocalPool(), M, block)
+    unsafe_unregister!(LocalPool(), manager, block)
 
     # Free the block we just removed.
-    free(LocalPool(), M, block)
+    free(LocalPool(), manager, block)
     setsibling!(sibling, Block())
+    @telemetry manager telemetry_move(gettelemetry(manager), id, Remote, length(block))
     return nothing
 end
 
@@ -782,6 +824,9 @@ function check(manager::CacheManager)
     if manager.size_of_remote != size_allocated
         println(
             "Manager and heap Remote objects size mismatch. Manager sees: $(manager.size_of_remote). Heap sees: $size_allocated.",
+        )
+        println(
+            "    Difference: $(Int.(sort(collect(setdiff(seen_ids, keys(manager.remote_objects))))))",
         )
         passed = false
     end

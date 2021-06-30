@@ -244,8 +244,13 @@ end
 ##### High level API
 #####
 
+const CAN_ALLOC_MESSAGE = """
+Something went wrong. Trying to allocate from a heap that has been temporarily marked
+as "no-allocate". It's likely something went wrong during eviction.
+"""
+
 function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
-    heap.canalloc || error("Uh oh")
+    heap.canalloc || error(CAN_ALLOC_MESSAGE)
     iszero(bytes) && return nothing
 
     needed_size = max(bytes + headersize(), one(bytes) << heap.minallocation.val)
@@ -367,8 +372,8 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     while sizefreed < sz
         candidate = walkprevious(heap, block)
         candidate === nothing && break
+        # Intenionally overwrite the argument "block".
         block = candidate
-
         abort = evict!(cb, heap, block)
         if (abort === true)
             block.evicting = false
