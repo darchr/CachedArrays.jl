@@ -106,6 +106,7 @@ include("policy/policy.jl")
 # Implementation of the arrays and cache manager
 include("managers/heapmanager.jl")
 include("managers/cachemanager.jl")
+include("managers/validation.jl")
 
 # Array Implementstions
 include("llvm.jl")

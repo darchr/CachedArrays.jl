@@ -204,6 +204,7 @@ function getsibling(x::Block)
 end
 
 setsibling!(x::Block, y::Block) = (x.sibling = y)
+setsibling!(x::Block, ::Nothing) = (x.sibling = Block())
 
 @inline markqueued!(x::Block) = (x.queued = true)
 @inline isqueued(x::Block) = x.queued

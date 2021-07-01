@@ -64,3 +64,43 @@ findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
 # We hit this case when there's Float32/Float64 confusion ...
 findT(::Type{T}, x::Base.Broadcast.Extruded{U}) where {T,U<:T} = x.x
 
+#####
+##### GC Callbacks
+#####
+
+# We can use GC Extensions to register a callback that will helpfully inform us
+# when the garbage collector runs.
+struct PostGCCallback
+    flag::Threads.Atomic{Int}
+end
+
+PostGCCallback() = PostGCCallback(Threads.Atomic{Int}(0))
+
+setflag(x::PostGCCallback) = Threads.atomic_xchg!(x.flag, 1)
+clearflag(x::PostGCCallback) = Threads.atomic_xchg!(x.flag, 0)
+
+function (cb::PostGCCallback)(_::Cint)
+    setflag(cb)
+    return nothing
+end
+
+"""
+    create_post_gc_callback() -> (PostGCCallback, CFunction)
+
+Create and register a Garbage Collector callback that will run after the garbage collector
+completes. The callback will set the atomic integer stored in `PostGCCallback` when
+invoked.
+
+Be sure to hold onto the returned `CFunction` as well, since the callback will be removed
+when the `CFunction` is garbage collected.
+"""
+function create_post_gc_callback()
+    cb = PostGCCallback()
+    cfunc = @cfunction($_cb, Cvoid, (Cint,))
+    @ccall jl_gc_set_post_gc(cfunc::Ptr{Cvoid}, 1::Cint)::Cvoid
+    finalizer(cfunc) do _cfunc
+        @ccall jl_gc_set_post_gc(_cfunc::Ptr{Cvoid}, 0::Cint)::Cvoid
+    end
+    return cb, cfunc
+end
+

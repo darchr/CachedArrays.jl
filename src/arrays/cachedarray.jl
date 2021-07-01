@@ -1,3 +1,10 @@
+#####
+##### Status Types
+#####
+
+# We use a type based strategy for controlling access to a CachedArray.
+# Transitions from one status to another (e.g. NotBusy -> ReadOnly) will potentially
+# trigger state updates in the manager/policy and record optional telemetry.
 abstract type AbstractStatus end
 struct NotBusy <: AbstractStatus end
 struct ReadOnly <: AbstractStatus end
@@ -9,6 +16,10 @@ _sym(::Type{ReadWrite}) = :ReadWrite
 
 const Readable = Union{ReadOnly,ReadWrite}
 const Writable = ReadWrite
+
+######
+###### CachedArray
+######
 
 struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
     region::Region{M}
@@ -34,6 +45,7 @@ const WritableCachedArray{T,N} = CachedArray{T,N,<:Writable,<:Any}
 const UnwritableCachedArray{T,N} = CachedArray{T,N,<:Union{NotBusy,ReadOnly},<:Any}
 const BusyCachedArray{T,N} = CachedArray{T,N,<:Union{ReadOnly,ReadWrite},<:Any}
 
+# Cached API
 region(A::CachedArray) = A.region
 metastyle(::CachedArray) = BlockMeta()
 datapointer(A::CachedArray) = datapointer(region(A))
@@ -45,16 +57,12 @@ manager(A::CachedArray) = manager(region(A))
 
 # Don't let functions normally take pointers to un-acquired CachedArrays.
 Base.pointer(A::CachedArray) = unsafe_pointer(A)
-function Base.pointer(A::CachedArray{<:Any,<:Any,NotBusy})
+function Base.pointer(A::UnreadableCachedArray)
     error("Cannot take a pointer to to a `NotBusy` CachedArray")
 end
 
-#####
-##### Constructors
-#####
-
-CachedArray(x::Array{T,N}, manager) where {T,N} = CachedArray{T,N}(x, manager)
-
+# Consructors
+CachedArray(x::Array{T,N}, manager; kw...) where {T,N} = CachedArray{T,N}(x, manager; kw...)
 function CachedArray{T,N}(
     x::Array{T,N},
     manager;
