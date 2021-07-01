@@ -7,6 +7,10 @@ import MacroTools
 using Distributions
 import ProgressMeter
 
+# Helper Functions
+inlocal(manager, A) = in(CachedArrays.getid(CachedArrays.metadata(A)), manager.localmap)
+inremote(manager, A) = in(CachedArrays.getid(CachedArrays.metadata(A)), manager.remotemap)
+
 include("utils/findnexttree.jl")
 include("allocators.jl")
 

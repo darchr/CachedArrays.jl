@@ -15,8 +15,8 @@ function gctest(manager)
     @test CachedArrays.pool(A) == Local
 
     # Make sure the global manager is updated correctly.
-    @test CachedArrays.inlocal(manager, A)
-    @test !CachedArrays.inremote(manager, A)
+    @test inlocal(manager, A)
+    @test !inremote(manager, A)
 
     # Evict this object.
     CachedArrays.evict!(A)
@@ -26,9 +26,9 @@ function gctest(manager)
     @test A == B
 
     # Make sure the cache gets updated.
-    @test !CachedArrays.inlocal(manager, A)
+    @test !inlocal(manager, A)
 
-    @test CachedArrays.inremote(manager, A)
+    @test inremote(manager, A)
 
     # Now prefetch the array back
     CachedArrays.prefetch!(A)
@@ -36,8 +36,8 @@ function gctest(manager)
     @test A == B
 
     # The cache maanger should now have this array stored at both locations.
-    @test CachedArrays.inlocal(manager, A)
-    @test CachedArrays.inremote(manager, A)
+    @test inlocal(manager, A)
+    @test inremote(manager, A)
     return nothing
 end
 
@@ -59,10 +59,10 @@ end
     # Wrap this body of code in a "let" block to ensure that GC will clean up any temporary
     # arrays created in the body.
     let
-        @test length(manager.local_objects) == 0
-        @test length(manager.remote_objects) == 0
-        @test CachedArrays.localsize(manager) == 0
-        @test CachedArrays.remotesize(manager) == 0
+        @test length(manager.localmap) == 0
+        @test length(manager.remotemap) == 0
+        @test CachedArrays.getsize(manager.localmap) == 0
+        @test CachedArrays.getsize(manager.remotemap) == 0
 
         # Okay, now start doing some operations on arrays.
         len = 2_000_000
@@ -75,18 +75,18 @@ end
         A .= vA
         B .= vB
 
-        @test CachedArrays.inlocal(manager, A)
-        @test CachedArrays.inlocal(manager, B)
-        @test CachedArrays.remotesize(manager) == 0
+        @test inlocal(manager, A)
+        @test inlocal(manager, B)
+        @test CachedArrays.getsize(manager.remotemap) == 0
 
         # Do a broadcasting add - make sure the newly created object is a CachedArray
         # and that it gets registered with the cache.
         C = A .+ B
         @test isa(C, CachedArray)
-        @test length(manager.local_objects) == 3
-        @test CachedArrays.inlocal(manager, A)
-        @test CachedArrays.inlocal(manager, B)
-        @test CachedArrays.inlocal(manager, C)
+        @test length(manager.localmap) == 3
+        @test inlocal(manager, A)
+        @test inlocal(manager, B)
+        @test inlocal(manager, C)
 
         # Now do some timing to make sure the overhead of CachedArrays isn't stupid.
         f!(C, A, B) = C .= A .+ B

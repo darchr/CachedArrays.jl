@@ -51,7 +51,8 @@ function fullpop!(C::LRU)
     return v
 end
 
-function Base.push!(C::LRU{T}, v::T) where {T}
+function Base.push!(C::LRU{T}, v::T, pool) where {T}
+    pool == Remote && return v
     # Assert this for now.
     @check !haskey(C.handles, v)
 
@@ -87,6 +88,7 @@ This is assumed to be a user-invoked method and the callback will **NOT** be cal
 the removed item.
 """
 function Base.delete!(C::LRU, v)
+    haskey(C.handles, v) || return nothing
     delete!(C.heap, C.handles[v])
     delete!(C.handles, v)
     return C

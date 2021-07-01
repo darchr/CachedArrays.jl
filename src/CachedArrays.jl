@@ -36,6 +36,7 @@ import ConstructionBase: constructorof
 const DEBUG = true
 const VERBOSE = false
 const ENABLETIMING = false
+const ALLOW_UNSAFE_FREE = true
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
 # Otherwise, it will simply forward to `@assert`.
@@ -87,13 +88,13 @@ alwaysfalse(x...; kw...) = false
 ##### includes
 #####
 
-include("api.jl")
 
 # Bootstrap Utilities
 include("utils/utils.jl")
 include("utils/findnexttree.jl")
 include("utils/freebuffer.jl")
 
+include("api.jl")
 include("allocators.jl")
 #include("metadata.jl")
 

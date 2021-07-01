@@ -25,18 +25,21 @@ function check(manager::CacheManager)
             size_allocated += length(block)
         end
     end
-    if manager.size_of_remote != size_allocated
+    if getsize(manager.remotemap) != size_allocated
         println(
-            "Manager and heap Remote objects size mismatch. Manager sees: $(manager.size_of_remote). Heap sees: $size_allocated.",
+            """
+            Manager and heap Remote objects size mismatch.
+            Manager sees: $(getsize(manager.remotemap)). Heap sees: $size_allocated.
+            """
         )
         println(
-            "    Difference: $(Int.(sort(collect(setdiff(seen_ids, keys(manager.remote_objects))))))",
+            "    Difference: $(Int.(sort(collect(setdiff(seen_ids, keys(manager.remotemap))))))",
         )
         passed = false
     end
 
-    issubset(seen_ids, keys(manager.remote_objects)) || (passed = false)
-    issubset(keys(manager.remote_objects), seen_ids) || (passed = false)
+    issubset(seen_ids, keys(manager.remotemap)) || (passed = false)
+    issubset(keys(manager.remotemap), seen_ids) || (passed = false)
 
     # Local Heap
     seen_ids = Set{UInt64}()
@@ -47,24 +50,24 @@ function check(manager::CacheManager)
             size_allocated += length(block)
         end
     end
-    if manager.size_of_local != size_allocated
+    if getsize(manager.localmap) != size_allocated
         println(
-            "Manager and heap Local objects size mismatch. Manager sees: $(manager.size_of_local). Heap sees: $size_allocated.",
+            "Manager and heap Local objects size mismatch. Manager sees: $(getsize(manager.localmap)). Heap sees: $size_allocated.",
         )
         println("    Manager IDS: $(Int.(sort(collect(keys(manager.local_objects)))))")
         println("    Heap IDS: $(Int.(sort(collect(seen_ids))))")
         passed = false
     end
 
-    if !issubset(seen_ids, keys(manager.local_objects))
+    if !issubset(seen_ids, keys(manager.localmap))
         println(
-            "Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))",
+            "Manager sees $(length(manager.localmap)) in Local. Heap sees $(length(seen_ids))",
         )
         passed = false
     end
-    if !issubset(keys(manager.local_objects), seen_ids)
+    if !issubset(keys(manager.localmap), seen_ids)
         println(
-            "Manager sees $(length(manager.local_objects)) in Local. Heap sees $(length(seen_ids))",
+            "Manager sees $(length(manager.localmap)) in Local. Heap sees $(length(seen_ids))",
         )
         passed = false
     end

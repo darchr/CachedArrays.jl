@@ -39,3 +39,58 @@ end
 
 update!(x) = update!(manager(x), metadata(x))
 
+#####
+##### Cacheable API
+#####
+
+isdirty(A) = isdirty(metadata(A))
+id(A) = getid(metadata(A))
+pool(A) = getpool(metadata(A))
+
+function prefetch!(A; kw...)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+        actuate!(
+            LocalPool(),
+            A,
+            _manager;
+            copydata = true,
+            updatebackedge = true,
+            freeblock = false,
+            kw...,
+        )
+    end
+end
+
+function shallowfetch!(A; kw...)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+        actuate!(
+            LocalPool(),
+            A,
+            _manager;
+            copydata = false,
+            updatebackedge = true,
+            freeblock = false,
+            kw...,
+        )
+    end
+end
+
+function evict!(A; kw...)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+        actuate!(
+            RemotePool(),
+            A,
+            _manager;
+            copydata = true,
+            updatebackedge = true,
+            freeblock = true,
+            kw...,
+        )
+    end
+end
+
+manager(x) = error("Implement `manager` for $(typeof(x))")
+

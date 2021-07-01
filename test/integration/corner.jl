@@ -21,11 +21,11 @@
         # As such, it will not even move the array and simple return.
         CachedArrays.evict!(_a)
 
-        @test length(manager.local_objects) == 0
-        @test manager.size_of_local == 0
+        @test length(manager.localmap) == 0
+        @test CachedArrays.getsize(manager.localmap) == 0
 
-        @test length(manager.remote_objects) == 0
-        @test manager.size_of_remote == 0
+        @test length(manager.remotemap) == 0
+        @test CachedArrays.getsize(manager.remotemap) == 0
 
         @test CachedArrays.check(manager.remote_heap)
         @test CachedArrays.check(manager.local_heap)
@@ -55,11 +55,11 @@
         # As such, it will not even move the array and simple return.
         CachedArrays.prefetch!(_a)
 
-        @test length(manager.local_objects) == 0
-        @test manager.size_of_local == 0
+        @test length(manager.localmap) == 0
+        @test CachedArrays.getsize(manager.localmap) == 0
 
-        @test length(manager.remote_objects) == 0
-        @test manager.size_of_remote == 0
+        @test length(manager.remotemap) == 0
+        @test CachedArrays.getsize(manager.remotemap) == 0
 
         @test CachedArrays.check(manager.remote_heap)
         @test CachedArrays.check(manager.local_heap)

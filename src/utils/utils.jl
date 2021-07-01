@@ -104,3 +104,21 @@ function create_post_gc_callback()
     return cb, cfunc
 end
 
+"""
+$(TYPEDSIGNATURES)
+
+Atomically store `v` to the location pointed to by `ptr` and return the old values
+stored at `ptr`.
+"""
+function atomic_ptr_xchg!(ptr::Ptr{Ptr{T}}, v::Ptr{T}) where {T}
+    return Base.llvmcall("""
+        %ptr = inttoptr i64 %0 to i64*
+        %rv = atomicrmw xchg i64* %ptr, i64 %1 acq_rel
+        ret i64 %rv
+        """,
+        Ptr{T},
+        Tuple{Ptr{Ptr{T}},Ptr{T}},
+        ptr,
+        v,
+    )
+end
