@@ -46,9 +46,9 @@ backedge(x::Backedge) = x
 backedge(x::Ptr) = convert(Backedge, x)
 backedge(x) = backedge(datapointer(x))
 
-struct BackedgeMap
+mutable struct BackedgeMap
     dict::Dict{UInt,Backedge}
-    size::Ref{Int}
+    size::Int
 end
 
 BackedgeMap() = BackedgeMap(Dict{UInt,Backedge}(), 0)
@@ -56,18 +56,18 @@ BackedgeMap() = BackedgeMap(Dict{UInt,Backedge}(), 0)
 Base.getindex(map::BackedgeMap, id) = map.dict[id]
 function set!(map::BackedgeMap, backedge::Backedge, id, sz::Integer)
     map.dict[id] = backedge
-    map.size[] += sz
+    map.size += sz
     return backedge
 end
 
 function Base.delete!(map::BackedgeMap, id::UInt, sz::Integer)
     delete!(map.dict, id)
-    @check map.size[] >= sz
-    map.size[] -= sz
+    @check map.size >= sz
+    map.size -= sz
     return nothing
 end
 
-getsize(map::BackedgeMap) = map.size[]
+getsize(map::BackedgeMap) = map.size
 Base.in(id, map::BackedgeMap) = haskey(map.dict, id)
 Base.length(map::BackedgeMap) = length(map.dict)
 Base.isempty(map::BackedgeMap) = isempty(map.dict)
@@ -485,7 +485,7 @@ function unsafe_alloc(
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager);
-    canabort = alwaysfalse
+    canabort::F = alwaysfalse
     # eviction_function::G = doeviction!,
     # kw...,
 ) where {T,F}

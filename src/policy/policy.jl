@@ -137,7 +137,7 @@ end
 ##### Implementation
 #####
 
-function _try_alloc_local(policy::OptaneTracker{N}, manager, bytes, id, priority) where {N}
+function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
     if getsize(getmap(manager, LocalPool())) >= 0.9 * sizeof(getheap(manager, LocalPool()))
         GC.gc(false)
     end
