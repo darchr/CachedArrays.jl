@@ -268,7 +268,7 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     return ptr
 end
 
-function canalloc(heap::CompactHeap, bytes::Integer)
+@inline function canalloc(heap::CompactHeap, bytes::Integer)
     iszero(bytes) && return false
 
     needed_size = max(bytes + headersize(), one(bytes) << heap.minallocation.val)
@@ -353,7 +353,10 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
             if current.orphaned
                 sizefreed += current.size
             else
-                iszero(sizefreed) && return nothing
+                if iszero(sizefreed)
+                    heap.canalloc = true
+                    return nothing
+                end
                 current = last
             end
 

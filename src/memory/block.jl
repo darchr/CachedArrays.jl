@@ -68,6 +68,9 @@ isnull(x::Block) = isnull(x.ptr)
 Base.isless(a::Block, b::Block) = a.ptr < b.ptr
 address(x::Block) = convert(UInt, pointer(x))
 
+Base.hash(x::Block, u::UInt = UInt(0x178e9aaf)) = hash(x.ptr, u)
+Base.:(==)(a::Block, b::Block) = (a.ptr == b.ptr)
+
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 
 struct BlockMeta end

@@ -29,7 +29,7 @@ end
 
 # Assumes that the "remove" lock is already held.
 function unsafe_swap!(buf::FreeBuffer)
-    @requires remove_lock(buf)
+    #@requires remove_lock(buf)
     @spinlock add_lock(buf) begin
         (buf.add, buf.remove) = (buf.remove, buf.add)
     end
@@ -37,6 +37,6 @@ end
 
 # Assumes that the "remove" lock is already held.
 function unsafe_get(buf::FreeBuffer)
-    @requires remove_lock(buf)
+    #@requires remove_lock(buf)
     return buf.remove
 end

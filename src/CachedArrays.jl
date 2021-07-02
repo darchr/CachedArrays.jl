@@ -36,6 +36,8 @@ import ConstructionBase: constructorof
 const DEBUG = true
 const VERBOSE = false
 const ENABLETIMING = false
+
+# Allow tracked Regions to be freed manually before garbage collection.
 const ALLOW_UNSAFE_FREE = true
 
 # If we're not in DEBUG mode, the @check macro will become a nop.
@@ -88,6 +90,7 @@ alwaysfalse(x...; kw...) = false
 ##### includes
 #####
 
+@enum AllocationPriority ForceLocal PreferLocal ForceRemote
 
 # Bootstrap Utilities
 include("utils/utils.jl")
@@ -96,7 +99,6 @@ include("utils/freebuffer.jl")
 
 include("api.jl")
 include("allocators.jl")
-#include("metadata.jl")
 
 # Heap implementations
 include("memory/memory.jl")

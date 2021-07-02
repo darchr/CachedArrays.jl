@@ -57,25 +57,25 @@
     @test CachedArrays.pool(B) == Remote
     @test CachedArrays.pool(C) == Local
 
-    # Now - test that locking movement works correctly.
-    # If we disable movement and then allocate a new array, it should be allocated in Remote
-    CachedArrays.disable_movement!(manager)
-    D = similar(B; priority = CachedArrays.ForceLocal)
+    # # Now - test that locking movement works correctly.
+    # # If we disable movement and then allocate a new array, it should be allocated in Remote
+    # CachedArrays.disable_movement!(manager)
+    # D = similar(B; priority = CachedArrays.ForceLocal)
 
-    @test CachedArrays.pool(A) == Local
-    @test CachedArrays.pool(B) == Remote
-    @test CachedArrays.pool(C) == Local
-    @test CachedArrays.pool(D) == Remote
+    # @test CachedArrays.pool(A) == Local
+    # @test CachedArrays.pool(B) == Remote
+    # @test CachedArrays.pool(C) == Local
+    # @test CachedArrays.pool(D) == Remote
 
-    # If we renable movement - then a new allocation should happen in Local with an evicion.
-    CachedArrays.enable_movement!(manager)
-    E = similar(B; priority = CachedArrays.ForceLocal)
+    # # If we renable movement - then a new allocation should happen in Local with an evicion.
+    # CachedArrays.enable_movement!(manager)
+    # E = similar(B; priority = CachedArrays.ForceLocal)
 
-    @test CachedArrays.pool(A) == Local
-    @test CachedArrays.pool(B) == Remote
-    @test CachedArrays.pool(C) == Remote
-    @test CachedArrays.pool(D) == Remote
-    @test CachedArrays.pool(E) == Local
+    # @test CachedArrays.pool(A) == Local
+    # @test CachedArrays.pool(B) == Remote
+    # @test CachedArrays.pool(C) == Remote
+    # @test CachedArrays.pool(D) == Remote
+    # @test CachedArrays.pool(E) == Local
 end
 
 @testset "Testing Manager Cleanup" begin

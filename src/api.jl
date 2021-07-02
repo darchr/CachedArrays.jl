@@ -49,17 +49,7 @@ pool(A) = getpool(metadata(A))
 
 function prefetch!(A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        actuate!(
-            LocalPool(),
-            A,
-            _manager;
-            copydata = true,
-            updatebackedge = true,
-            freeblock = false,
-            kw...,
-        )
-    end
+    @spinlock alloc_lock(_manager) prefetch!(A, _manager.policy, _manager)
 end
 
 function shallowfetch!(A; kw...)
@@ -79,17 +69,7 @@ end
 
 function evict!(A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        actuate!(
-            RemotePool(),
-            A,
-            _manager;
-            copydata = true,
-            updatebackedge = true,
-            freeblock = true,
-            kw...,
-        )
-    end
+    @spinlock alloc_lock(_manager) evict!(A, _manager.policy, _manager)
 end
 
 manager(x) = error("Implement `manager` for $(typeof(x))")

@@ -88,7 +88,7 @@ This is assumed to be a user-invoked method and the callback will **NOT** be cal
 the removed item.
 """
 function Base.delete!(C::LRU, v)
-    haskey(C.handles, v) || return nothing
+    in(v, C) || return nothing
     delete!(C.heap, C.handles[v])
     delete!(C.handles, v)
     return C

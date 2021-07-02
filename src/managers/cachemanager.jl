@@ -1,5 +1,3 @@
-@enum AllocationPriority ForceLocal PreferLocal ForceRemote
-
 mutable struct Region{T}
     # TODO: Store the allocation function in the block header to avoid taking space in
     # the region struct?
@@ -8,7 +6,7 @@ mutable struct Region{T}
 
     function Region(ptr::Ptr{Nothing}, manager::T) where {T}
         region = new{T}(ptr, manager)
-        register!(manager, backedge(region), ptr)
+        unsafe_register!(manager, backedge(region), ptr)
         finalizer(free, region)
         return region
     end
@@ -33,13 +31,7 @@ function alloc(
     priority::AllocationPriority = PreferLocal,
     id = getid(region.manager),
 )
-    ptr = @spinlock alloc_lock(manager(region)) unsafe_alloc(
-        manager(region),
-        bytes,
-        priority,
-        id,
-    )
-    return Region(ptr, manager(region))
+    return alloc(manager(region), bytes, priority, id)
 end
 
 #####
@@ -117,12 +109,12 @@ mutable struct CacheManager{C,T}
     freebuffer::FreeBuffer{Block}
 
     ## local tunables
-    gc_when_over_local::Int
-    gc_when_over_remote::Int
+    #gc_when_over_local::Int
+    #gc_when_over_remote::Int
     abort_callback::AbortCallback{AlignedAllocator}
 
     ## Prevent arrays from moving
-    allow_movement::Bool
+    #allow_movement::Bool
     telemetry::T
 end
 
@@ -142,13 +134,14 @@ Returns the allocation lock for `manager` without acquiring it.
 """
 alloc_lock(manager::CacheManager) = manager.alloc_lock
 
+mb(x) = x * 1_000_000
 function CacheManager(
     path::AbstractString;
     localsize = 1_000_000_000,
     remotesize = 1_000_000_000,
-    policy = LRU{Block}(),
     gc_when_over = 0.95,
     minallocation = 10,
+    policy = OptaneTracker((2^minallocation, mb(4), mb(8), mb(16), mb(32))),
     telemetry = NoTelemetry(),
 )
     localmap = BackedgeMap()
@@ -184,12 +177,7 @@ function CacheManager(
         FreeBuffer{Block}(),
 
         # tunables,
-        floor(Int, gc_when_over * sizeof(local_heap)),
-        floor(Int, gc_when_over * sizeof(remote_heap)),
         AbortCallback(local_heap, 0),
-
-        # runtime settings
-        allow_movement,
 
         # telemetry
         telemetry,
@@ -205,7 +193,7 @@ getid(manager::CacheManager) = Threads.atomic_add!(manager.idcount, one(UInt64))
 # Can only GC if all objects tracked via backedges have been collected.
 function cangc(manager::CacheManager)
     # Empty out the cleanlist to deal with anything that's been GC'd
-    @spinlock alloc_lock(manager) cleanup(manager)
+    @spinlock alloc_lock(manager) unsafe_cleanup!(manager)
     return isempty(manager.localmap) && isempty(manager.remotemap)
 end
 
@@ -274,8 +262,10 @@ function alloc(
     priority::AllocationPriority = PreferLocal,
     id::UInt = getid(manager),
 )
-    ptr = @spinlock alloc_lock(manager) unsafe_alloc(manager, bytes, priority, id)
-    return Region(ptr, manager)
+    return @spinlock alloc_lock(manager) begin
+        ptr = unsafe_alloc(manager, bytes, priority, id)
+        return Region(ptr, manager)
+    end
 end
 
 # Note: `push!` for the `FreeBuffer` is thread safe, so no synchonizations needs
@@ -334,23 +324,21 @@ point to the `Region` (i.e. mutable struct) holding `allocated_pointer`.
 The best way to obtain `backedge` is `Base.pointer_from_objref(region)` where
 `region::Region`.
 """
-function register!(
+function unsafe_register!(
     manager::CacheManager,
     backedge::Backedge,
     allocated_pointer::Ptr{Nothing},
 )
-    @spinlock alloc_lock(manager) begin
-        block = unsafe_block(allocated_pointer)
-        # Register with the appropriate pool.
-        # Statically dispatch to avoid a potential allocation.
-        p = block.pool
-        if p == Local
-            unsafe_register!(LocalPool(), manager, block, backedge)
-        elseif p == Remote
-            unsafe_register!(RemotePool(), manager, block, backedge)
-        else
-            error("Unknown Pool: $p")
-        end
+    block = unsafe_block(allocated_pointer)
+    # Register with the appropriate pool.
+    # Statically dispatch to avoid a potential allocation.
+    p = block.pool
+    if p == Local
+        unsafe_register!(LocalPool(), manager, block, backedge)
+    elseif p == Remote
+        unsafe_register!(RemotePool(), manager, block, backedge)
+    else
+        error("Unknown Pool: $p")
     end
     return nothing
 end
@@ -410,19 +398,20 @@ end
 # method below which will put back all of the blocks on the `cleanlist`.
 
 # Have an optional, ignored argument for a similar signature to `unsafe_cleanup!`.
-function cleanup(manager::CacheManager, _id::Union{Integer,Nothing} = nothing)
-    @spinlock remove_lock(manager.freebuffer) begin
-        prepare_cleanup!(manager)
-        unsafe_cleanup!(manager)
-    end
-end
+# function cleanup(manager::CacheManager, _id::Union{Integer,Nothing} = nothing)
+#     @spinlock remove_lock(manager.freebuffer) begin
+#         prepare_cleanup!(manager)
+#         unsafe_cleanup!(manager)
+#     end
+# end
 
 prepare_cleanup!(manager::CacheManager) = unsafe_swap!(manager.freebuffer)
 
 # N.B. - `free_lock` must be held to call this.
 const TIMES = UInt64[]
 function unsafe_cleanup!(M::CacheManager, id = nothing)
-    @requires alloc_lock(M) remove_lock(M.freebuffer)
+    @requires alloc_lock(M) #remove_lock(M.freebuffer)
+    prepare_cleanup!(M)
     start = time_ns()
     id_cleaned = false
 
@@ -488,101 +477,26 @@ function unsafe_alloc(
     priority::AllocationPriority,
     id = getid(manager),
 )
-    # Don't bother trying to allocate to the local heap if the requested allocation
-    # is bigger than the heap anyways.
-    if bytes <= sizeof(manager.local_heap) && priority != ForceRemote
-        ptr = _pool_alloc(LocalPool(), manager, bytes, id; priority)
-        if ptr !== nothing
-            @telemetry manager telemetry_alloc(
-                gettelemetry(manager),
-                manager,
-                bytes,
-                id,
-                ptr,
-                Local,
-            )
-            return ptr
-        end
-    end
-
-    # No free space. Try to allocate from Remote
-    ptr = _pool_alloc(RemotePool(), manager, bytes, id)
-    @telemetry manager telemetry_alloc(
-        gettelemetry(manager),
-        manager,
-        bytes,
-        id,
-        ptr,
-        Remote,
-    )
-    return ptr
+    return policy_new_alloc(manager.policy, manager, bytes, id, priority)
 end
 
-function _pool_alloc(
-    ::LocalPool,
+function unsafe_alloc(
+    pool::PoolType{T},
     manager::CacheManager,
     bytes,
     id::UInt = getid(manager);
-    priority::AllocationPriority = PreferLocal,
-    cleanup_function::F = cleanup,
-    eviction_function::G = doeviction!,
-    kw...,
-) where {F,G}
+    canabort = alwaysfalse
+    # eviction_function::G = doeviction!,
+    # kw...,
+) where {T,F}
     @requires alloc_lock(manager)
-    heap = manager.local_heap
+    heap = getheap(manager, pool)
 
     # Try to cleanup the freebuffer.
     # The cleanup function *may* take an ID, in which case it will return "true" if
     # the id we're trying to allocate was freed as part of the cleanup process.
     #
     # If this is the case, then we simply abort.
-    if candrain(manager.freebuffer) && cleanup_function(manager, id)
-        return Ptr{Nothing}()
-    end
-
-    # See if we should heuristically trigger an incremental GC
-    # TODO: Move this to the policy to avoid over-calling `GC.gc()`?
-    already_gc = false
-    if getsize(manager.localmap) >= manager.gc_when_over_local
-        GC.gc(false)
-        already_gc = true
-    end
-
-    # Try allocating the pointer.
-    # If allocation fails try cleaning up the free buffer.
-    ptr = alloc(heap, bytes, id)
-    if ptr === nothing
-        already_gc || GC.gc(false)
-        candrain(manager.freebuffer) && cleanup_function(manager)
-        ptr = alloc(heap, bytes, id)
-    end
-
-    # Still failed, try moving some local objects to remote memory.
-    if ptr === nothing && manager.allow_movement
-        canabort = manager.abort_callback
-        canabort.bytes = bytes
-        eviction_function(manager, bytes; canabort = canabort)
-        ptr = alloc(manager.local_heap, bytes, id)
-    end
-    return ptr
-end
-
-function _pool_alloc(
-    ::RemotePool,
-    manager::CacheManager,
-    bytes,
-    id::UInt = getid(manager);
-    cleanup_function::F = cleanup,
-    canabort::A = alwaysfalse,
-    kw...,
-) where {F,A}
-    @requires alloc_lock(manager)
-
-    heap = manager.remote_heap
-    if getsize(manager.remotemap) >= manager.gc_when_over_remote
-        GC.gc(true)
-    end
-
     if candrain(manager.freebuffer)
         # If this block gets cleaned up, then first check if it's okay to abort
         # the eviction operation.
@@ -591,13 +505,12 @@ function _pool_alloc(
         #
         # If it is NOT okay to abort the eviction operation, but the block was
         # cleaned, return a null ptr.
-        cleaned = cleanup_function(manager, id)
+        cleaned = unsafe_cleanup!(manager, id)
         canabort() && return nothing
         cleaned && return Ptr{Nothing}()
     end
-    ptr = alloc(heap, bytes, id)
-    ptr === nothing && error("Cannot Allocate from PM")
-    return ptr
+
+    return alloc(heap, bytes, id)
 end
 
 # Dispatch plumbing!
@@ -610,60 +523,6 @@ _free_convert(x::Block) = _free_convert(datapointer(x))
 
 function free(pool::PoolType, manager::CacheManager, x)
     return free(getheap(manager, pool), _free_convert(x))
-end
-
-#####
-##### Eviction
-#####
-
-"""
-$(TYPEDSIGNATURES)
-
-Safely try to free `bytes` bytes from the fast memory in `manager`.
-Keyword argument `canabort` is zero-argument a callback returning `true` if it is safe
-to abort the eviction procedure potentially before all space has been cleared.
-
-NOTE: `manager`'s allocation lock (`alloc_lock(manager)`) must be held before this
-function is called.
-"""
-function doeviction!(manager::CacheManager, bytes; canabort::F = alwaysfalse) where {F}
-    @spinlock remove_lock(manager.freebuffer) unsafe_eviction!(manager, bytes; canabort)
-end
-
-"""
-$(TYPEDSIGNATURES)
-
-Similar to [`doeviction!`](@ref) but assumes that both `alloc_lock(manager)` and
-`remove_lock(manager.freebuffer)` are held.
-
-Try to free `bytes` bytes from the fast memory in `manager`.
-Keyword argument `canabort` is zero-argument a callback returning `true` if it is safe
-to abort the eviction procedure potentially before all space has been cleared.
-"""
-function unsafe_eviction!(manager::CacheManager, bytes; canabort::F = alwaysfalse) where {F}
-    @requires alloc_lock(manager) remove_lock(manager.freebuffer)
-
-    # The eviction callback
-    cb = block -> actuate!(RemotePool(), block, manager; canabort)
-
-    isempty(manager.policy) && return nothing
-    token = fullpop!(manager.policy)
-    block = getval(Block, token)
-
-    # Block is queued for freeing - no need to move it.
-    # Put it back into the policy tracker to avoid messing it up and perform
-    # a cleanup.
-    if isqueued(block)
-        push!(manager.policy, token)
-        unsafe_cleanup(manager)
-
-        # TODO: Might be able to check at this point if we can allocate for real.
-        return nothing
-    end
-
-    # Perform our managed eviction.
-    evictfrom!(manager.local_heap, block, bytes; cb = cb)
-    return nothing
 end
 
 #####
@@ -686,7 +545,7 @@ function actuate!(
     # Callback for early termination.
     canabort = alwaysfalse,
 ) where {T}
-    @requires alloc_lock(manager) remove_lock(manager.freebuffer)
+    @requires alloc_lock(manager) #remove_lock(manager.freebuffer)
 
     # If the data is already local, mark a usage and return.
     if getpool(block) == T
@@ -700,13 +559,11 @@ function actuate!(
     createsibling = (sibling === nothing)
     id = getid(block)
     if createsibling
-        sibling_ptr = _pool_alloc(
+        sibling_ptr = unsafe_alloc(
             pool,
             manager,
             length(block),
             id;
-            cleanup_function = unsafe_cleanup!,
-            eviction_function = unsafe_eviction!,
             canabort = canabort,
         )
 
@@ -737,7 +594,7 @@ function actuate!(
         if isqueued(block)
             unsafe_cleanup!(manager)
             # Abort operation
-            free(pool, manager, sibling)
+            createsibling && free(pool, manager, sibling)
             return canabort() ? true : nothing
         end
     else
