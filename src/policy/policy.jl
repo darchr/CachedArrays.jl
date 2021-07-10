@@ -20,6 +20,9 @@ include("random.jl")
 ##### More Advanced Policy
 #####
 
+# TODO: Mutable Binary Heaps from DataStructurtes.jl aren't really that great.
+# Consider using a different data structure that doesn't suffer the memory blowup of
+# the DataStructures.jl implementation.
 const MutableMinHeap{T} = DataStructures.MutableBinaryHeap{T,Base.ForwardOrdering}
 
 # Type parameter: number of bins
@@ -104,6 +107,12 @@ end
 
 update!(policy::OptaneTracker, _) = nothing
 
+function softevict!(policy::OptaneTracker, manager, block)
+    # Is this block in any of the live heaps.
+    bin = findbin(policy.bins, length(block); inbounds = true)
+end
+
+### policy_new_alloc
 function policy_new_alloc(
     policy::OptaneTracker{N},
     manager,
@@ -144,15 +153,13 @@ function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
 
     # If allocation is successful, good!
     ptr = unsafe_alloc(LocalPool(), manager, bytes)
-    ptr === nothing || return ptr
-
 
     # If we're here, and we really need local, then we have to start evicting.
-    if priority == ForceLocal
+    if priority == ForceLocal && ptr === nothing
         _eviction!(policy, manager, bytes)
         ptr = unsafe_alloc(LocalPool(), manager, bytes)
-        ptr === nothing || return ptr
     end
+    return ptr
 end
 
 function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}

@@ -396,23 +396,10 @@ end
 #
 # When we're trying to allocate (i.e., holding the lock) - THEN we'll call the `_cleanup`
 # method below which will put back all of the blocks on the `cleanlist`.
-
-# Have an optional, ignored argument for a similar signature to `unsafe_cleanup!`.
-# function cleanup(manager::CacheManager, _id::Union{Integer,Nothing} = nothing)
-#     @spinlock remove_lock(manager.freebuffer) begin
-#         prepare_cleanup!(manager)
-#         unsafe_cleanup!(manager)
-#     end
-# end
-
 prepare_cleanup!(manager::CacheManager) = unsafe_swap!(manager.freebuffer)
-
-# N.B. - `free_lock` must be held to call this.
-const TIMES = UInt64[]
 function unsafe_cleanup!(M::CacheManager, id = nothing)
-    @requires alloc_lock(M) #remove_lock(M.freebuffer)
+    @requires alloc_lock(M)
     prepare_cleanup!(M)
-    start = time_ns()
     id_cleaned = false
 
     while true
@@ -463,7 +450,6 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
             break
         end
     end
-    push!(TIMES, time_ns() - start)
     return id_cleaned
 end
 
@@ -486,8 +472,6 @@ function unsafe_alloc(
     bytes,
     id::UInt = getid(manager);
     canabort::F = alwaysfalse
-    # eviction_function::G = doeviction!,
-    # kw...,
 ) where {T,F}
     @requires alloc_lock(manager)
     heap = getheap(manager, pool)

@@ -35,7 +35,7 @@ import ConstructionBase: constructorof
 # Default to `true` for now because of development
 const DEBUG = true
 const VERBOSE = false
-const ENABLETIMING = false
+const ENABLETIMING = true
 
 # Allow tracked Regions to be freed manually before garbage collection.
 const ALLOW_UNSAFE_FREE = true
