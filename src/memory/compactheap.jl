@@ -18,7 +18,6 @@ mutable struct CompactHeap{T} <: AbstractHeap
     minallocation::PowerOfTwo
 
     # Where is and what kind of memory do we have?
-    basehost::Any
     base::Ptr{Nothing}
     len::Int
     pool::Pool
@@ -45,8 +44,7 @@ function CompactHeap(
     sz = (sz >> minallocation.val) << minallocation.val
 
     # Allocate the memory managed by this heap
-    basehost = allocate(allocator, sz)
-    base = topointer(basehost)
+    base = allocate(allocator, sz)
 
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
@@ -55,7 +53,6 @@ function CompactHeap(
     heap = CompactHeap{T}(
         allocator,
         minallocation,
-        basehost,
         base,
         sz,
         pool,
@@ -65,7 +62,7 @@ function CompactHeap(
     )
 
     finalizer(heap) do x
-        free(x.allocator, x.basehost)
+        free(x.allocator, x.base)
     end
 
     # Add an entry for the biggest freelist.

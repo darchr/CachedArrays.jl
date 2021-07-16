@@ -9,20 +9,23 @@ struct MmapAllocator <: AbstractAllocator
     dir::String
 end
 
+const MMAP_ALLOCATED_ARRAYS = Dict{Ptr{Nothing},Vector{UInt8}}()
+
 function allocate(allocator::MmapAllocator, sz)
     name = tempname(allocator.dir; cleanup = false)
     A = open(name; create = true, read = true, write = true) do io
         Mmap.mmap(io, Vector{UInt8}, sz)
     end
-
+    ptr = Ptr{Nothing}(pointer(A))
+    MMAP_ALLOCATED_ARRAYS[ptr] = A
     # Remove the file - OS will keep it around as long as our process is running and the
     # cleanup once the process terminates.
     rm(name)
-    return A
+    return ptr
 end
 
 # Let the Mmap finalizer do its thing
-free(::MmapAllocator, _) = nothing
+free(::MmapAllocator, ptr::Ptr) = delete!(MMAP_ALLOCATED_ARRAYS, ptr)
 
 #####
 ##### DRAM Allocator

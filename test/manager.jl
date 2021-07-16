@@ -6,7 +6,8 @@
     GC.gc(true)
     minallocation = 12
     manager = CachedArrays.CacheManager(
-        @__DIR__;
+        CachedArrays.AlignedAllocator(),
+        CachedArrays.AlignedAllocator();
         localsize = 2^20,
         remotesize = 2^22,
         minallocation = minallocation,

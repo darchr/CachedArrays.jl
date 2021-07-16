@@ -146,9 +146,10 @@ end
 ##### Implementation
 #####
 
+# TODO: Time since last GC?
 function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
-    if getsize(getmap(manager, LocalPool())) >= 0.9 * sizeof(getheap(manager, LocalPool()))
-        GC.gc(false)
+    if getsize(getmap(manager, LocalPool())) >= 0.90 * sizeof(getheap(manager, LocalPool()))
+        GC.gc(true)
     end
 
     # If allocation is successful, good!

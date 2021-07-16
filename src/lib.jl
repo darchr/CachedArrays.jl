@@ -61,6 +61,7 @@ macro wrapper(typ, fields...)
     return quote
         $(overloads...)
         $maybesuper
+        # $_expand
     end
 end
 
@@ -121,37 +122,39 @@ function annotate_impl(fn)
         if MacroTools.@capture(x, f_(args__))
             # Only interested in our keywords, which will always be symbols in the
             # processed code (hopefully).
-            if isa(f, Symbol)
-                if f == :__invoke__
-                    # Deal with keywords.
-                    # Keywords get stored at the start of a function call as a "parameters"
-                    # expression.
-                    #
-                    # Don't need to do this for the other function calls because they
-                    # already get treated correctly.
-                    if !isempty(args) && isa(args[1], Expr) && args[1].head == :parameters
-                        # Kind of a hack - remove the "parameters" head so we can splat
-                        # out the keywords in the correct position.
-                        kwargs = args[1].args
-                        popfirst!(args)
-                    else
-                        kwargs = []
-                    end
-                    return quote
-                        tup = ($(args...),)
-                        $(Base.invoke)(
-                            $(def[:name]),
-                            Tuple{maybesuper.(tup)...},
-                            tup...;
-                            $(kwargs...),
-                        )
-                    end
-                elseif f == :__recurse__
-                    return :($(def[:name])($(args...)))
+            if isa(f, Symbol) && f == :__invoke__
+                # Deal with keywords.
+                # Keywords get stored at the start of a function call as a "parameters"
+                # expression.
+                #
+                # Don't need to do this for the other function calls because they
+                # already get treated correctly.
+                if !isempty(args) && isa(args[1], Expr) && args[1].head == :parameters
+                    # Kind of a hack - remove the "parameters" head so we can splat
+                    # out the keywords in the correct position.
+                    kwargs = args[1].args
+                    popfirst!(args)
                 else
-                    newf = maybe_process_call(f)
-                    return :($newf($(args...)))
+                    kwargs = []
                 end
+                return quote
+                    tup = ($(args...),)
+                    $(Base.invoke)(
+                        $(def[:name]),
+                        Tuple{maybesuper.(tup)...},
+                        tup...;
+                        $(kwargs...),
+                    )
+                end
+            end
+        end
+
+        # Deal with magic keywords
+        if isa(x, Symbol)
+            if x == :__recurse__
+                return def[:name]
+            else
+                return maybe_process_call(x)
             end
         end
 

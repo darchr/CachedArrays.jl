@@ -1,6 +1,7 @@
 @testset "Testing Corner Cases" begin
     manager = CachedArrays.CacheManager(
-        @__DIR__;
+        CachedArrays.AlignedAllocator(),
+        CachedArrays.AlignedAllocator();
         localsize = 100_000_000,
         remotesize = 500_000_000,
         minallocation = 12, # 4096 Bytes

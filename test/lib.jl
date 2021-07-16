@@ -70,7 +70,8 @@ end
 @testset "Testing Library Utilities" begin
     @testset "Testing @wrapper" begin
         manager = CachedArrays.CacheManager(
-            @__DIR__;
+            CachedArrays.AlignedAllocator(),
+            CachedArrays.AlignedAllocator();
             localsize = 1_000_000_000,
             remotesize = 1_000_000_000,
             minallocation = 12

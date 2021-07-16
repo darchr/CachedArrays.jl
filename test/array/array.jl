@@ -45,7 +45,8 @@ end
     # Grab ahold of the default manager so we can make sure it gets updated correctly.
     GC.gc(true)
     manager = CachedArrays.CacheManager(
-        @__DIR__;
+        CachedArrays.AlignedAllocator(),
+        CachedArrays.AlignedAllocator();
         localsize = 1_000_000_000,
         remotesize = 1_000_000_000,
         minallocation = 12,

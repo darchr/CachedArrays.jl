@@ -92,14 +92,14 @@ const RemotePool = PoolType{Remote}
 const LocalPool = PoolType{Local}
 
 struct NoTelemetry end
-mutable struct CacheManager{C,T}
+mutable struct CacheManager{C,R,L,T}
     localmap::BackedgeMap
     remotemap::BackedgeMap
 
     # local datastructures
     policy::C
-    remote_heap::CompactHeap{MmapAllocator}
-    local_heap::CompactHeap{AlignedAllocator}
+    remote_heap::CompactHeap{R}
+    local_heap::CompactHeap{L}
 
     # Create a new ID for each object registered in the cache.
     idcount::Threads.Atomic{UInt64}
@@ -111,7 +111,7 @@ mutable struct CacheManager{C,T}
     ## local tunables
     #gc_when_over_local::Int
     #gc_when_over_remote::Int
-    abort_callback::AbortCallback{AlignedAllocator}
+    abort_callback::AbortCallback{L}
 
     ## Prevent arrays from moving
     #allow_movement::Bool
@@ -136,7 +136,8 @@ alloc_lock(manager::CacheManager) = manager.alloc_lock
 
 mb(x) = x * 1_000_000
 function CacheManager(
-    path::AbstractString;
+    local_allocator,
+    remote_allocator;
     localsize = 1_000_000_000,
     remotesize = 1_000_000_000,
     gc_when_over = 0.95,
@@ -149,14 +150,14 @@ function CacheManager(
 
     # Initialize Heaps
     remote_heap = CompactHeap(
-        MmapAllocator(path),
+        remote_allocator,
         remotesize;
         pool = Remote,
         minallocation = minallocation,
     )
 
     local_heap = CompactHeap(
-        AlignedAllocator(),
+        local_allocator,
         localsize;
         pool = Local,
         minallocation = minallocation,
@@ -217,7 +218,7 @@ end
 
 gettelemetry(manager::CacheManager) = manager.telemetry
 telemetry_enabled(::CacheManager) = true
-telemetry_enabled(::CacheManager{<:Any,NoTelemetry}) = false
+telemetry_enabled(::CacheManager{<:Any,<:Any,<:Any,NoTelemetry}) = false
 
 macro telemetry(manager, expr)
     return quote
@@ -569,7 +570,8 @@ function actuate!(
     # Copy data to sibling.
     # Otherwise, assume that the newblock is dirty and it will be written.
     if copydata
-        _memcpy!(sibling_ptr, datapointer(block), length(block))
+        nthreads = (T == Local) ? Threads.nthreads() : 4
+        _memcpy!(sibling_ptr, datapointer(block), length(block); nthreads)
 
         # Performing the memcpy may trigger garbage collection.
         # Since we hold the remove-lock - no one else has tried to cleanup the manager.

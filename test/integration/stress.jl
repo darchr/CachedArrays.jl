@@ -59,7 +59,8 @@ end
     allocation_range = 2048 # bytes
 
     manager = CachedArrays.CacheManager(
-        @__DIR__;
+        CachedArrays.AlignedAllocator(),
+        CachedArrays.AlignedAllocator();
         localsize = 100 * target_mean_allocation,
         # Make the remote size pretty large so we don't need to worry about running out
         # of memory.

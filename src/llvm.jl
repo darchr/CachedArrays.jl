@@ -23,33 +23,32 @@ using LLVM.Interop
 function arraybuf_tbaa(ctx)
     # Get the array_buf tbaa node.
     # Look in `codegen.cpp` for the name of this node.
-    tbaa_root = MDNode([MDString("jtbaa", ctx)], ctx)
-
+    tbaa_root = MDNode([MDString("jtbaa"; ctx)]; ctx)
     tbaa_struct = MDNode([
-        MDString("jtbaa_arraybuf", ctx),
+        MDString("jtbaa_arraybuf"; ctx),
         tbaa_root,
-        LLVM.ConstantInt(0, ctx)
-    ], ctx)
+        LLVM.ConstantInt(0; ctx)
+    ]; ctx)
 
     tbaa_tag = MDNode([
         tbaa_struct,
         tbaa_struct,
         # Offset - must set to 0
-        LLVM.ConstantInt(0, ctx),
+        LLVM.ConstantInt(0; ctx),
         # Constant - set to 0
-        LLVM.ConstantInt(0, ctx),
-    ], ctx)
+        LLVM.ConstantInt(0; ctx),
+    ]; ctx)
 
     return tbaa_tag
 end
 
 @generated function unsafe_custom_load(ptr::Ptr{T}, i::Integer=1) where {T}
-    JuliaContext() do ctx
+    Context() do ctx
         # Convert the element type
-        eltyp = convert(LLVMType, T, ctx)
+        eltyp = convert(LLVMType, T; ctx)
 
         # LLVM Int and Pointer types
-        T_int = LLVM.IntType(sizeof(Int)*8, ctx)
+        T_int = LLVM.IntType(sizeof(Int)*8; ctx)
         T_ptr = LLVM.PointerType(eltyp)
 
         # Create a function
@@ -58,7 +57,7 @@ end
 
         # Generate IR
         Builder(ctx) do builder
-            entry = BasicBlock(llvmf, "entry", ctx)
+            entry = BasicBlock(llvmf, "entry"; ctx)
             position!(builder, entry)
 
             ptr = inttoptr!(builder, parameters(llvmf)[1], T_ptr)
@@ -74,17 +73,17 @@ end
             ret!(builder, val)
         end
 
-        return call_function(llvmf, T, Tuple{Ptr{T}, Int}, :(ptr, Int(i-1)))
+        return call_function(llvmf, T, Tuple{Ptr{T}, Int}, :(ptr), :(Int(i-1)))
     end
 end
 
 @generated function unsafe_custom_store!(ptr::Ptr{T}, v, i::Integer=1) where {T}
-    JuliaContext() do ctx
+    Context() do ctx
         # Convert the element type
-        eltyp = convert(LLVMType, T, ctx)
+        eltyp = convert(LLVMType, T; ctx)
 
         # LLVM Int and Pointer Types
-        T_int = LLVM.IntType(sizeof(Int) * 8, ctx)
+        T_int = LLVM.IntType(sizeof(Int) * 8; ctx)
         T_ptr = LLVM.PointerType(eltyp)
 
         # Create a function
@@ -93,7 +92,7 @@ end
 
         # Generate IR
         Builder(ctx) do builder
-            entry = BasicBlock(llvmf, "entry", ctx)
+            entry = BasicBlock(llvmf, "entry"; ctx)
             position!(builder, entry)
 
             ptr = inttoptr!(builder, parameters(llvmf)[1], T_ptr)
@@ -114,7 +113,9 @@ end
             llvmf,
             Cvoid,
             Tuple{Ptr{T}, T, Int},
-            :(ptr, convert(T, v), Int(i-1)),
+            :(ptr),
+            :(convert(T, v)),
+            :(Int(i-1)),
         )
     end
 end
