@@ -9,6 +9,14 @@ poweroftwo(x::Integer) = PowerOfTwo(x)
 getbin(x::PowerOfTwo, sz) = ((sz - 1) >> x.val) + 1
 binsize(x::PowerOfTwo, bin) = bin << x.val
 
+macro checknothing(expr, action = :(return nothing))
+    return quote
+        x = $(esc(expr))
+        x === nothing && $(esc(action))
+        x
+    end
+end
+
 #####
 ##### CompactHeap
 #####
@@ -50,16 +58,7 @@ function CompactHeap(
     status = FindNextTree(numbins)
     freelists = [Freelist{Block}() for _ = 1:numbins]
 
-    heap = CompactHeap{T}(
-        allocator,
-        minallocation,
-        base,
-        sz,
-        pool,
-        status,
-        freelists,
-        true,
-    )
+    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists, true)
 
     finalizer(heap) do x
         free(x.allocator, x.base)
@@ -286,6 +285,80 @@ function free(heap::CompactHeap, ptr::Ptr{Nothing})
 end
 
 #####
+##### Defrag API
+#####
+
+function nextfree(heap, block = baseblock(heap))
+    while block !== nothing && (!isfree(block) || block.queued)
+        block = walknext(heap, block)
+    end
+    return block
+end
+
+"""
+    defrag!(f::F, heap::CompactHeap; [nthreads])
+
+Defragment `heap`. Callback function `f` is given an ID and a new block.
+"""
+function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {F}
+    @checknothing freeblock = nextfree(heap)
+    @checknothing block = walknext(heap, freeblock)
+
+    while true
+        # By the invariants we keep on the heap, the next block should be not-free.
+        # However, it MIGHT be queued for deletion, in which case, we can't move it.
+        if block.queued
+            @checknothing freeblock = nextfree(heap, block) break
+            @checknothing block = walknext(heap, freeblock) break
+            continue
+        end
+
+        # Now, we need to move "block" to "freeblock" and then fixup the heap.
+        id = block.id
+        pool = block.pool
+        block.backsize = freeblock.backsize
+        freeblock_size = freeblock.size
+        remove!(heap, freeblock)
+
+        # After the "memcpy", the new location for "block" is "freeblock".
+        # Thus, we need to perform the callback so that references can be updated.
+        aliases = pointer(freeblock) + sizeof(block) > pointer(block)
+        if aliases
+            _memcpy!(pointer(freeblock), pointer(block), sizeof(block); nthreads = nothing)
+        else
+            _memcpy!(pointer(freeblock), pointer(block), sizeof(block); nthreads)
+        end
+
+        f(id, freeblock, block)
+        @check freeblock.id == id
+
+        # Update siblings
+        sibling = getsibling(freeblock)
+        if sibling !== nothing
+            sibling.sibling = freeblock
+        end
+
+        # Since we haven't changed the size of the block, "walknext" should still work,
+        # though the actual block returned will be garbage.
+        block = freeblock
+        freeblock = walknext(heap, block)
+
+        freeblock.backsize = block.size
+        freeblock.size = freeblock_size
+        freeblock.free = true
+
+        # TODO: In all likely hood, we're just going to be removing the freeblock again.
+        # However, dealing with queued blocks makes this tricky so do the conservative
+        # thing for now.
+        putback!(heap, freeblock)
+
+        @checknothing block = walknext(heap, freeblock) break
+        block.backsize = freeblock.size
+    end
+    return nothing
+end
+
+#####
 ##### Eviction API
 #####
 
@@ -455,7 +528,9 @@ function freelist_status_invariant(heap::CompactHeap)
             if hasentryat(mask, j)
                 # There must be a key in the `freelists` dictionary and it must be non-empty
                 if isempty(heap.freelists[bin])
-                    println("Heap has a `status` entry for bin $bin but no corresponding freelist bound")
+                    println(
+                        "Heap has a `status` entry for bin $bin but no corresponding freelist bound",
+                    )
                     passed = false
                 end
             else
@@ -489,7 +564,9 @@ function size_invariant(heap::CompactHeap)
         next, state = y
 
         if next.backsize != block.size
-            println("Block $(count + 1) has backsize $(next.backsize). Expected $(block.size)")
+            println(
+                "Block $(count + 1) has backsize $(next.backsize). Expected $(block.size)",
+            )
             passed = false
         end
 
@@ -522,7 +599,9 @@ function free_invariant(heap::CompactHeap)
                 passed = false
             else
                 if length(freelist) != counts[bin]
-                    println("Length of freelist is $(length(freelist)) but counted $(counts[bin]) blocks")
+                    println(
+                        "Length of freelist is $(length(freelist)) but counted $(counts[bin]) blocks",
+                    )
                     passed = false
                 end
                 delete!(counts, bin)

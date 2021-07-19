@@ -135,9 +135,251 @@
             @test CachedArrays.check(heap)
         end
     end
+
+    @testset "Defragmentation" begin
+        # The idea here is to get the heap into a known state with an expected
+        # post-defragmentation result, then try defragmentation with an appropriate
+        # callback and make sure the right things happen.
+        #
+        # First, we will do the easy case with no blocks queued for being returned
+        # to the heap, then we'll test that case.
+        minallocation = CachedArrays.PowerOfTwo(12)
+        minallocation_bytes = 2 ^ (minallocation.val)
+        allocation_size = 10 * 2 ^ (minallocation.val)
+
+        heap = CachedArrays.CompactHeap(
+            CachedArrays.AlignedAllocator(),
+            allocation_size;
+            minallocation = minallocation,
+        )
+
+        oneblock = (2 ^ (minallocation.val) - CachedArrays.headersize())
+        twoblock = (2 * 2 ^ (minallocation.val) - CachedArrays.headersize())
+
+        idmap = Dict{UInt64,CachedArrays.Block}()
+
+        # The target state pre-defragmentation is shown below, where each block
+        # in the upper region represents a region of size "minallocation"
+        #
+        # F = Free
+        # A = Allocated
+        #
+        # +---+---+---+---+---+---+---+---+---+---+
+        # |   | 1 |   | 2 |   |   | 3 | 4 | 5 |   | Heap Blocks
+        # +---+---+---+---+---+---+---+---+---+---+
+        # | F |   A1  | A2|   F   | A3| A4|   A5  | Logical Blocks
+        # +---+-------+---+-------+---+---+-------+
+        #         |     |               |     |
+        #         |     +---------------+     |
+        #         |          siblings         |
+        #         +---------------------------+
+
+        ptr_f1 = CachedArrays.alloc(heap, oneblock, UInt(0))
+        ptr_a1 = CachedArrays.alloc(heap, twoblock, UInt(1))
+        ptr_a2 = CachedArrays.alloc(heap, oneblock, UInt(2))
+
+        ptr_f2 = CachedArrays.alloc(heap, twoblock, UInt(0))
+        ptr_a3 = CachedArrays.alloc(heap, oneblock, UInt(3))
+        ptr_a4 = CachedArrays.alloc(heap, oneblock, UInt(4))
+        ptr_a5 = CachedArrays.alloc(heap, twoblock, UInt(5))
+
+        basepointer = CachedArrays.basepointer(heap)
+        headersize = CachedArrays.headersize()
+        @test ptr_f1 == basepointer + headersize
+        @test ptr_a1 == basepointer + minallocation_bytes + headersize
+        @test ptr_a2 == basepointer + 3 * minallocation_bytes + headersize
+        @test ptr_f2 == basepointer + 4 * minallocation_bytes + headersize
+        @test ptr_a3 == basepointer + 6 * minallocation_bytes + headersize
+        @test ptr_a4 == basepointer + 7 * minallocation_bytes + headersize
+        @test ptr_a5 == basepointer + 8 * minallocation_bytes + headersize
+
+        CachedArrays.free(heap, ptr_f1)
+        CachedArrays.free(heap, ptr_f2)
+
+        # Set siblings
+        block_a1 = CachedArrays.unsafe_block(ptr_a1)
+        block_a5 = CachedArrays.unsafe_block(ptr_a5)
+        @test block_a1.id == 1
+        @test block_a5.id == 5
+        block_a1.sibling = block_a5
+        block_a5.sibling = block_a1
+        @test block_a1.id == 1
+        @test block_a5.id == 5
+
+        block_a2 = CachedArrays.unsafe_block(ptr_a2)
+        block_a4 = CachedArrays.unsafe_block(ptr_a4)
+        @test block_a2.id == 2
+        @test block_a4.id == 4
+        block_a2.sibling = block_a4
+        block_a4.sibling = block_a2
+        @test block_a2.id == 2
+        @test block_a4.id == 4
+
+        block_a3 = CachedArrays.unsafe_block(ptr_a3)
+        @test block_a3.id == 3
+
+        # Set block mapping
+        for block in (block_a1, block_a2, block_a3, block_a4, block_a5)
+            idmap[block.id] = block
+        end
+
+        # Time to defrag!
+        count = 1
+        CachedArrays.defrag!(heap) do id, newblock, _
+            @test id == count
+            count += 1
+
+            @test haskey(idmap, id)
+            idmap[id] = newblock
+        end
+
+        # Time to see how we did!
+        offset = 0
+        for i in 1:length(idmap)
+            block = idmap[i]
+            @test pointer(block) == CachedArrays.basepointer(heap) + offset
+            offset += sizeof(block)
+        end
+
+        # Check siblings.
+        @test idmap[1].sibling === idmap[5]
+        @test idmap[5].sibling === idmap[1]
+
+        @test idmap[2].sibling === idmap[4]
+        @test idmap[4].sibling === idmap[2]
+
+        # Number of blocks should be 6 - 5 allocated, one free at the end.
+        @test length(heap) == 6
+        @test CachedArrays.check(heap)
+    end
+
+    @testset "Defragmentation - Queueing" begin
+        # The idea here is to get the heap into a known state with an expected
+        # post-defragmentation result, then try defragmentation with an appropriate
+        # callback and make sure the right things happen.
+        #
+        # First, we will do the easy case with no blocks queued for being returned
+        # to the heap, then we'll test that case.
+        minallocation = CachedArrays.PowerOfTwo(12)
+        minallocation_bytes = 2 ^ (minallocation.val)
+        allocation_size = 10 * 2 ^ (minallocation.val)
+
+        heap = CachedArrays.CompactHeap(
+            CachedArrays.AlignedAllocator(),
+            allocation_size;
+            minallocation = minallocation,
+        )
+
+        oneblock = (2 ^ (minallocation.val) - CachedArrays.headersize())
+        twoblock = (2 * 2 ^ (minallocation.val) - CachedArrays.headersize())
+
+        idmap = Dict{UInt64,CachedArrays.Block}()
+
+        # The target state pre-defragmentation is shown below, where each block
+        # in the upper region represents a region of size "minallocation"
+        #
+        # F = Free
+        # A = Allocated
+        #
+        #               +- Marked As Queued. Cannot be moved.
+        #               |
+        #               v
+        # +---+---+---+---+---+---+---+---+---+---+
+        # |   | 1 |   | 2 |   |   | 3 | 4 | 5 |   | Heap Blocks
+        # +---+---+---+---+---+---+---+---+---+---+
+        # | F |   A1  | A2|   F   | A3| A4|   A5  | Logical Blocks
+        # +---+-------+---+-------+---+---+-------+
+        #         |     |               |     |
+        #         |     +---------------+     |
+        #         |          siblings         |
+        #         +---------------------------+
+
+        ptr_f1 = CachedArrays.alloc(heap, oneblock, UInt(0))
+        ptr_a1 = CachedArrays.alloc(heap, twoblock, UInt(1))
+        ptr_a2 = CachedArrays.alloc(heap, oneblock, UInt(2))
+
+        ptr_f2 = CachedArrays.alloc(heap, twoblock, UInt(0))
+        ptr_a3 = CachedArrays.alloc(heap, oneblock, UInt(3))
+        ptr_a4 = CachedArrays.alloc(heap, oneblock, UInt(4))
+        ptr_a5 = CachedArrays.alloc(heap, twoblock, UInt(5))
+
+        basepointer = CachedArrays.basepointer(heap)
+        headersize = CachedArrays.headersize()
+        @test ptr_f1 == basepointer + headersize
+        @test ptr_a1 == basepointer + minallocation_bytes + headersize
+        @test ptr_a2 == basepointer + 3 * minallocation_bytes + headersize
+        @test ptr_f2 == basepointer + 4 * minallocation_bytes + headersize
+        @test ptr_a3 == basepointer + 6 * minallocation_bytes + headersize
+        @test ptr_a4 == basepointer + 7 * minallocation_bytes + headersize
+        @test ptr_a5 == basepointer + 8 * minallocation_bytes + headersize
+
+        CachedArrays.free(heap, ptr_f1)
+        CachedArrays.free(heap, ptr_f2)
+
+        # Set siblings
+        block_a1 = CachedArrays.unsafe_block(ptr_a1)
+        block_a5 = CachedArrays.unsafe_block(ptr_a5)
+        @test block_a1.id == 1
+        @test block_a5.id == 5
+        block_a1.sibling = block_a5
+        block_a5.sibling = block_a1
+        @test block_a1.id == 1
+        @test block_a5.id == 5
+
+        block_a2 = CachedArrays.unsafe_block(ptr_a2)
+        block_a4 = CachedArrays.unsafe_block(ptr_a4)
+        @test block_a2.id == 2
+        @test block_a4.id == 4
+        block_a2.sibling = block_a4
+        block_a4.sibling = block_a2
+        @test block_a2.id == 2
+        @test block_a4.id == 4
+
+        block_a3 = CachedArrays.unsafe_block(ptr_a3)
+        @test block_a3.id == 3
+
+        # Set block mapping
+        for block in (block_a1, block_a2, block_a3, block_a4, block_a5)
+            idmap[block.id] = block
+        end
+
+        # Time to defrag!
+        block_a2.queued = true
+        CachedArrays.defrag!(heap) do id, newblock, _
+            @test haskey(idmap, id)
+            idmap[id] = newblock
+        end
+
+        # Time to see how we did!
+        offset = 0
+        for i in 1:length(idmap)
+            if i == 2
+                offset += minallocation_bytes
+            end
+
+            block = idmap[i]
+            @test pointer(block) == CachedArrays.basepointer(heap) + offset
+            offset += sizeof(block)
+        end
+
+        # Check siblings.
+        @test idmap[1].sibling === idmap[5]
+        @test idmap[5].sibling === idmap[1]
+
+        @test idmap[2].sibling === idmap[4]
+        @test idmap[4].sibling === idmap[2]
+
+        # Number of blocks should be 7
+        # 1 allocated at the beginning.
+        # 1 free after it.
+        # 4 allocated.
+        # 1 free for the remainder.
+        @test length(heap) == 7
+        @test CachedArrays.check(heap)
+    end
 end
 
-@testset "Testing Evition Corner Cases" begin
+@testset "Testing Eviction Corner Cases" begin
     # This tests the case where we have the following scenario:
     #
     #                 Evicted      Evicting

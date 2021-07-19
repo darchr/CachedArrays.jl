@@ -88,20 +88,24 @@ function Base.push!(policy::OptaneTracker, block::Block, pool)
     return block
 end
 
-function Base.delete!(policy::OptaneTracker, block::Block)
+function Base.delete!(policy::OptaneTracker, block::Block, len = length(block))
     # TODO: Metadata in block so we don't have to do two searches.
-    bin = findbin(policy.bins, length(block); inbounds = true)
+    bin = findbin(policy.bins, len; inbounds = true)
     local_dict = policy.local_handles[bin]
+    deleted = false
     if haskey(local_dict, block)
+        deleted = true
         delete!(policy.live_local_objects[bin], local_dict[block])
         delete!(local_dict, block)
     end
 
     evictable_dict = policy.evictable_handles[bin]
     if haskey(evictable_dict, block)
+        deleted = true
         delete!(policy.marked_as_evictable[bin], evictable_dict[block])
         delete!(evictable_dict, block)
     end
+    @check deleted = true
     return nothing
 end
 
@@ -123,11 +127,44 @@ function policy_new_alloc(
     # Can we try to allocate locally?
     if priority != ForceRemote
         ptr = _try_alloc_local(policy, manager, bytes, id, priority)
-        ptr === nothing || return ptr
+        if ptr !== nothing
+            return ptr
+        else
+            # Is defragmentation going to be worth it?
+            localheap = getheap(manager, LocalPool())
+            localmap = getmap(manager, LocalPool())
+            heaplength = length(localheap)
+            allocated = getsize(localmap)
+            if (heaplength - allocated) >= bytes
+                safeprint("Trying Defragmentation!"; force = true)
+                defrag!(manager, policy)
+                ptr = unsafe_alloc(LocalPool(), manager, bytes)
+                if ptr === nothing
+                    safeprint("Fragmentation Unsucessful!"; force = true)
+                else
+                    safeprint("Fragmentation Successful!"; force = true)
+                    return ptr
+                end
+            end
+        end
     end
 
     # Fallback path - allocate remotely.
-    return unsafe_alloc(RemotePool(), manager, bytes)
+    ptr = unsafe_alloc(RemotePool(), manager, bytes)
+    if ptr === nothing
+        error("Ran out of memory!")
+    end
+    return ptr
+end
+
+function defrag!(manager, policy::OptaneTracker = manager.policy)
+    pool = LocalPool()
+    localmap = getmap(manager, pool)
+    defrag!(getheap(manager, pool)) do id, newblock, oldblock
+        old = atomic_ptr_xchg!(localmap[id], datapointer(newblock))
+        delete!(policy, oldblock, length(newblock))
+        push!(policy, newblock, pool)
+    end
 end
 
 function prefetch!(A, policy::OptaneTracker, manager)
@@ -148,8 +185,10 @@ end
 
 # TODO: Time since last GC?
 function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
-    if getsize(getmap(manager, LocalPool())) >= 0.90 * sizeof(getheap(manager, LocalPool()))
+    if getsize(getmap(manager, LocalPool())) >= 0.95 * sizeof(getheap(manager, LocalPool()))
+        # Trigger full GC and try to get pending finalizers to run.
         GC.gc(true)
+        GC.enable_finalizers()
     end
 
     # If allocation is successful, good!
@@ -180,6 +219,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
         mutableheap = @inbounds(policy.marked_as_evictable[bin])
         if !isempty(mutableheap)
             block = getval(Block, first(mutableheap))
+            @check in(block.id, getmap(manager, LocalPool()))
             evictfrom!(getheap(manager, LocalPool()), block, bytes; cb)
             return nothing
         end
@@ -190,6 +230,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
         mutableheap = @inbounds(policy.live_local_objects[bin])
         if !isempty(mutableheap)
             block = getval(Block, first(mutableheap))
+            @check in(block.id, getmap(manager, LocalPool()))
             # TODO: make this cleaner ...
             evictfrom!(getheap(manager, LocalPool()), block, bytes; cb)
             return nothing

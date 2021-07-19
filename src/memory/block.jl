@@ -60,7 +60,8 @@ Block() = Block(Ptr{Nothing}(0))
 Block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr))
 Block(address::UInt) = Block(Ptr{Nothing}(address))
 
-Base.length(block) = block.size - headersize()
+Base.length(block::Block) = block.size - headersize()
+Base.sizeof(block::Block) = block.size
 
 Base.pointer(x::Block) = getfield(x, :ptr)
 datapointer(x::Block) = pointer(x) + headersize()
@@ -68,8 +69,8 @@ isnull(x::Block) = isnull(x.ptr)
 Base.isless(a::Block, b::Block) = a.ptr < b.ptr
 address(x::Block) = convert(UInt, pointer(x))
 
-Base.hash(x::Block, u::UInt = UInt(0x178e9aaf)) = hash(x.ptr, u)
-Base.:(==)(a::Block, b::Block) = (a.ptr == b.ptr)
+Base.hash(x::Block, u::UInt = UInt(0x178e9aaf)) = hash(pointer(x), u)
+Base.:(==)(a::Block, b::Block) = (pointer(a) == pointer(b))
 
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 

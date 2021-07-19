@@ -11,6 +11,7 @@ function epoch(
     allocate = true,
     prefetch_percent = 0.20,
     evict_percent = 0.02,
+    defrag_percent = 0.01,
 ) where {F}
     if allocate
         size, lifetime = generator()
@@ -47,6 +48,20 @@ function epoch(
         end
     end
 
+    # Maybe Defrag.
+    if rand() < defrag_percent
+        array_evicted = false
+        for pair in arrays
+            if rand() < evict_percent
+                CachedArrays.evict!(pair.cached_array)
+                array_evicted = true
+            end
+        end
+        if array_evicted
+            CachedArrays.defrag!(manager)
+        end
+    end
+
     for array in arrays_to_delete
         delete!(arrays, array)
     end
@@ -55,8 +70,8 @@ end
 @testset "Performing Stress Test 1" begin
     target_allocations = 100_000
     target_mean_lifetime = 200
-    target_mean_allocation = 4096 # bytes
-    allocation_range = 2048 # bytes
+    target_mean_allocation = 8192 # bytes
+    allocation_range = 8191 # bytes
 
     manager = CachedArrays.CacheManager(
         CachedArrays.AlignedAllocator(),
@@ -64,7 +79,8 @@ end
         localsize = 100 * target_mean_allocation,
         # Make the remote size pretty large so we don't need to worry about running out
         # of memory.
-        remotesize = ceil(Int, 0.5 * target_allocations * target_mean_allocation),
+        remotesize = ceil(Int, target_allocations * target_mean_allocation),
+        minallocation = 12,
     )
 
     # Create the generator function.
