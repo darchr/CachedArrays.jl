@@ -1,3 +1,6 @@
+# Dispatch Token
+struct Cacheable end
+
 #####
 ##### Metadata
 #####
@@ -47,12 +50,12 @@ isdirty(A) = isdirty(metadata(A))
 id(A) = getid(metadata(A))
 pool(A) = getpool(metadata(A))
 
-function prefetch!(A; kw...)
+function prefetch!(::Cacheable, A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) prefetch!(A, _manager.policy, _manager)
 end
 
-function shallowfetch!(A; kw...)
+function shallowfetch!(::Cacheable, A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
         actuate!(
@@ -67,10 +70,17 @@ function shallowfetch!(A; kw...)
     end
 end
 
-function evict!(A; kw...)
+function evict!(::Cacheable, A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) evict!(A, _manager.policy, _manager)
 end
 
+function softevict!(::Cacheable, A)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) softevict!(_manager.policy, _manager, metadata(A))
+end
+
+# TODO: This is such a hack ...
+unsafe_free(::Cacheable, A) = unsafe_free(A.region)
 manager(x) = error("Implement `manager` for $(typeof(x))")
 

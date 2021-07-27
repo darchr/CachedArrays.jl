@@ -231,11 +231,11 @@ const __updates = Dict(
 
 for (typ, fn) in __fnmap
     # No-op if already correct type.
-    @eval function $fn(x::CachedArray{T,N,$typ}) where {T,N}
+    @eval function $fn(::Cacheable, x::CachedArray{T,N,$typ}) where {T,N}
         return x
     end
 
-    @eval function $fn(x::CachedArray{T,N,S}) where {T,N,S}
+    @eval function $fn(::Cacheable, x::CachedArray{T,N,S}) where {T,N,S}
         # Optional Telemetry
         @telemetry manager(x) begin
             telemetry_change(

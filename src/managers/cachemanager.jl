@@ -12,10 +12,15 @@ mutable struct Region{T}
     end
 end
 
-Base.pointer(region::Region) = region.ptr
-datapointer(region::Region) = pointer_from_objref(region)
+function Base.pointer(region::Region)
+    ptr = region.ptr
+    isnull(ptr) && error("Trying to use a freed region!")
+    return ptr
+end
+unsafe_pointer(region::Region) = region.ptr
+blockpointer(region::Region) = pointer_from_objref(region)
 
-free(region::Region) = free(manager(region), pointer(region))
+free(region::Region) = free(manager(region), unsafe_pointer(region))
 metastyle(::Region) = BlockMeta()
 manager(region::Region) = region.manager
 
@@ -44,7 +49,7 @@ const Backedge = Ptr{Ptr{Nothing}}
 
 backedge(x::Backedge) = x
 backedge(x::Ptr) = convert(Backedge, x)
-backedge(x) = backedge(datapointer(x))
+backedge(x) = backedge(blockpointer(x))
 
 mutable struct BackedgeMap
     dict::Dict{UInt,Backedge}
@@ -142,7 +147,8 @@ function CacheManager(
     remotesize = 1_000_000_000,
     gc_when_over = 0.95,
     minallocation = 10,
-    policy = OptaneTracker((2^minallocation, mb(4), mb(8), mb(16), mb(32))),
+    #policy = OptaneTracker((2^minallocation, mb(4), mb(8), mb(16), mb(32))),
+    policy = OptaneTracker((2^minallocation,)),
     telemetry = NoTelemetry(),
 )
     localmap = BackedgeMap()
@@ -281,9 +287,11 @@ end
 
     # TODO: What if this is called while movement is happening ...
     function unsafe_free(region::Region)
-        ptr = pointer(region)
-        old = atomic_ptr_xchg!(datapointer(region), Ptr{Nothing}())
-        isnull(old) || free(manager, ptr)
+        ptr = unsafe_pointer(region)
+
+        ptrptr = Ptr{Ptr{Nothing}}(blockpointer(region))
+        old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
+        isnull(old) || free(manager(region), ptr)
     end
 else
     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
@@ -464,6 +472,7 @@ function unsafe_alloc(
     priority::AllocationPriority,
     id = getid(manager),
 )
+    candrain(manager.freebuffer) && unsafe_cleanup!(manager)
     return policy_new_alloc(manager.policy, manager, bytes, id, priority)
 end
 

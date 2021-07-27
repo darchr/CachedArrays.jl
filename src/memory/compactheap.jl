@@ -9,14 +9,6 @@ poweroftwo(x::Integer) = PowerOfTwo(x)
 getbin(x::PowerOfTwo, sz) = ((sz - 1) >> x.val) + 1
 binsize(x::PowerOfTwo, bin) = bin << x.val
 
-macro checknothing(expr, action = :(return nothing))
-    return quote
-        x = $(esc(expr))
-        x === nothing && $(esc(action))
-        x
-    end
-end
-
 #####
 ##### CompactHeap
 #####
@@ -308,13 +300,18 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # By the invariants we keep on the heap, the next block should be not-free.
         # However, it MIGHT be queued for deletion, in which case, we can't move it.
         if block.queued
-            @checknothing freeblock = nextfree(heap, block) break
-            @checknothing block = walknext(heap, freeblock) break
+            @checknothing freeblock = nextfree(heap, block)
+            @checknothing block = walknext(heap, freeblock)
             continue
         end
 
+        # The following operations need to be atomic as far as the GC is concerned.
+        # This takes care of if the GC runs while we're moving data and the block we
+        # are moving suddenly becomes free ...
+
         # Now, we need to move "block" to "freeblock" and then fixup the heap.
         id = block.id
+        safeprint("Defrag: Moving $id")
         pool = block.pool
         block.backsize = freeblock.backsize
         freeblock_size = freeblock.size
@@ -323,13 +320,13 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # After the "memcpy", the new location for "block" is "freeblock".
         # Thus, we need to perform the callback so that references can be updated.
         aliases = pointer(freeblock) + sizeof(block) > pointer(block)
+        f(id, freeblock, block)
         if aliases
             _memcpy!(pointer(freeblock), pointer(block), sizeof(block); nthreads = nothing)
         else
             _memcpy!(pointer(freeblock), pointer(block), sizeof(block); nthreads)
         end
 
-        f(id, freeblock, block)
         @check freeblock.id == id
 
         # Update siblings
@@ -352,7 +349,7 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # thing for now.
         putback!(heap, freeblock)
 
-        @checknothing block = walknext(heap, freeblock) break
+        @checknothing block = walknext(heap, freeblock)
         block.backsize = freeblock.size
     end
     return nothing
@@ -487,7 +484,7 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Threads.@threads for i = 1:4096:sizeof(heap)
+    Polyester.@batch per=core for i = 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
     end
     return nothing

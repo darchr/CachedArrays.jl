@@ -149,7 +149,7 @@ end
 
     @testset "Testing @annotate" begin
         # Test "maybe_process_call" works on keywords and ignores nonkeywords.
-        for keyword in CachedArrays.CACHEDARRAY_KEYWORDS
+        for keyword in CachedArrays.KEYWORDS
             sym = Symbol("__$(keyword)__")
             @test CachedArrays.maybe_process_call(sym) == Symbol(keyword)
         end

@@ -50,6 +50,29 @@ macro requires(locks...)
     end
 end
 
+macro checknothing(expr, action = :(return nothing))
+    return quote
+        x = $(esc(expr))
+        x === nothing && $(esc(action))
+        x
+    end
+end
+
+"""
+    @return_if_exists expr
+
+If the result of `expr` is not `nothing`, then return that result.
+Otherwise, continue execution.
+"""
+macro return_if_exists(expr)
+    return quote
+        x = $(esc(expr))
+        x === nothing || return x
+        x
+    end
+end
+
+
 # We need to search through the `bc` object for the first instance of T
 # Once we find it, return it.
 findT(::Type{T}, bc::Base.Broadcast.Broadcasted) where {T} = findT(T, bc.args)
