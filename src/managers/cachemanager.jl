@@ -6,15 +6,17 @@ mutable struct Region{T}
 
     function Region(ptr::Ptr{Nothing}, manager::T) where {T}
         region = new{T}(ptr, manager)
-        unsafe_register!(manager, backedge(region), ptr)
-        finalizer(free, region)
+        if !isnull(ptr)
+            unsafe_register!(manager, backedge(region), ptr)
+            finalizer(free, region)
+        end
         return region
     end
 end
 
 function Base.pointer(region::Region)
     ptr = region.ptr
-    isnull(ptr) && error("Trying to use a freed region!")
+    #isnull(ptr) && error("Trying to use a freed region!")
     return ptr
 end
 unsafe_pointer(region::Region) = region.ptr
@@ -270,7 +272,7 @@ function alloc(
     id::UInt = getid(manager),
 )
     return @spinlock alloc_lock(manager) begin
-        ptr = unsafe_alloc(manager, bytes, priority, id)
+        ptr = iszero(bytes) ? Ptr{Nothing}() : unsafe_alloc(manager, bytes, priority, id)
         return Region(ptr, manager)
     end
 end
