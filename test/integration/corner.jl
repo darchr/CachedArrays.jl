@@ -1,4 +1,5 @@
 @testset "Testing Corner Cases" begin
+    Local, Remote = CachedArrays.Local, CachedArrays.Remote
     manager = CachedArrays.CacheManager(
         CachedArrays.AlignedAllocator(),
         CachedArrays.AlignedAllocator();
@@ -22,11 +23,8 @@
         # As such, it will not even move the array and simple return.
         CachedArrays.evict!(_a)
 
-        @test length(manager.localmap) == 0
-        @test CachedArrays.getsize(manager.localmap) == 0
-
-        @test length(manager.remotemap) == 0
-        @test CachedArrays.getsize(manager.remotemap) == 0
+        @test length(CachedArrays.visible_ids(manager, Local)) == 0
+        @test length(CachedArrays.visible_ids(manager, Remote)) == 0
 
         @test CachedArrays.check(manager.remote_heap)
         @test CachedArrays.check(manager.local_heap)
@@ -56,11 +54,8 @@
         # As such, it will not even move the array and simple return.
         CachedArrays.prefetch!(_a)
 
-        @test length(manager.localmap) == 0
-        @test CachedArrays.getsize(manager.localmap) == 0
-
-        @test length(manager.remotemap) == 0
-        @test CachedArrays.getsize(manager.remotemap) == 0
+        @test length(CachedArrays.visible_ids(manager, Local)) == 0
+        @test length(CachedArrays.visible_ids(manager, Remote)) == 0
 
         @test CachedArrays.check(manager.remote_heap)
         @test CachedArrays.check(manager.local_heap)

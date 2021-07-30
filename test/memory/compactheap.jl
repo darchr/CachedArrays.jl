@@ -70,7 +70,7 @@
         @test ptrD == base + 4096 + CachedArrays.headersize()
     end
 
-    @testset "Scoping Block" begin
+    @testset "Scoping" begin
         #len = 100_000_000
         allocator = CachedArrays.AlignedAllocator()
         len = 2^27
@@ -165,9 +165,9 @@
         # A = Allocated
         #
         # +---+---+---+---+---+---+---+---+---+---+
-        # |   | 1 |   | 2 |   |   | 3 | 4 | 5 |   | Heap Blocks
+        # |   | 1 |   | 2 |   |   | 3 | 4 | 5 |   | Heap Block
         # +---+---+---+---+---+---+---+---+---+---+
-        # | F |   A1  | A2|   F   | A3| A4|   A5  | Logical Blocks
+        # | F |   A1  | A2|   F   | A3| A4|   A5  | Logical Block
         # +---+-------+---+-------+---+---+-------+
         #         |     |               |     |
         #         |     +---------------+     |
@@ -285,9 +285,9 @@
         #               |
         #               v
         # +---+---+---+---+---+---+---+---+---+---+
-        # |   | 1 |   | 2 |   |   | 3 | 4 | 5 |   | Heap Blocks
+        # |   | 1 |   | 2 |   |   | 3 | 4 | 5 |   | Heap Block
         # +---+---+---+---+---+---+---+---+---+---+
-        # | F |   A1  | A2|   F   | A3| A4|   A5  | Logical Blocks
+        # | F |   A1  | A2|   F   | A3| A4|   A5  | Logical Block
         # +---+-------+---+-------+---+---+-------+
         #         |     |               |     |
         #         |     +---------------+     |

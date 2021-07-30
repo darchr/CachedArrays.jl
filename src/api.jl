@@ -52,7 +52,10 @@ pool(A) = getpool(metadata(A))
 
 function prefetch!(::Cacheable, A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) prefetch!(A, _manager.policy, _manager)
+    @spinlock alloc_lock(_manager) begin
+        maybe_cleanup!(_manager)
+        prefetch!(A, _manager.policy, _manager)
+    end
 end
 
 function shallowfetch!(::Cacheable, A; kw...)
@@ -72,7 +75,11 @@ end
 
 function evict!(::Cacheable, A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) evict!(A, _manager.policy, _manager)
+    @spinlock alloc_lock(_manager) begin
+        maybe_cleanup!(_manager)
+        evict!(A, _manager.policy, _manager)
+    end
+    return nothing
 end
 
 function softevict!(::Cacheable, A)

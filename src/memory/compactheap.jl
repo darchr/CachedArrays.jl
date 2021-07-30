@@ -20,6 +20,7 @@ mutable struct CompactHeap{T} <: AbstractHeap
     # Where is and what kind of memory do we have?
     base::Ptr{Nothing}
     len::Int
+    allocated::Int
     pool::Pool
 
     # Maintaining freelist status
@@ -30,6 +31,7 @@ end
 
 topointer(ptr::Ptr) = ptr
 topointer(A::AbstractArray) = convert(Ptr{Nothing}, pointer(A))
+getstate(heap::CompactHeap) = (heap.allocated, heap.len)
 
 function CompactHeap(
     allocator::T,
@@ -45,12 +47,23 @@ function CompactHeap(
 
     # Allocate the memory managed by this heap
     base = allocate(allocator, sz)
+    allocated = 0
 
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
     freelists = [Freelist{Block}() for _ = 1:numbins]
 
-    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists, true)
+    heap = CompactHeap{T}(
+        allocator,
+        minallocation,
+        base,
+        sz,
+        allocated,
+        pool,
+        status,
+        freelists,
+        true,
+    )
 
     finalizer(heap) do x
         free(x.allocator, x.base)
@@ -248,6 +261,7 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     block === nothing && return nothing
 
     # Setup the default state for the block
+    heap.allocated += sizeof(block)
     clearbits!(block)
     block.id = id
     block.pool = heap.pool
@@ -272,6 +286,7 @@ function free(heap::CompactHeap, ptr::Ptr{Nothing})
         return nothing
     end
     block.free = true
+    heap.allocated -= sizeof(block)
     putback!(heap, block)
     return nothing
 end
@@ -359,7 +374,7 @@ end
 ##### Eviction API
 #####
 
-function unsafe_free!(f, block::Block)
+function unsafe_free!(f::F, block::Block) where {F}
     @check !isfree(block)
 
     # Mark this block as being evicted.
@@ -371,10 +386,11 @@ function unsafe_free!(f, block::Block)
     return f(block)
 end
 
-function evict!(f::F, heap, block) where {F}
+function evict!(f::F, heap::CompactHeap, block::Block) where {F}
     if isfree(block)
         remove!(heap, block)
         block.free = false
+        heap.allocated += sizeof(block)
         return nothing
     else
         return unsafe_free!(f, block)
@@ -389,6 +405,7 @@ end
 function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     heap.canalloc = false
     sizefreed = 0
+
     last = block
     current = block
 
@@ -463,6 +480,8 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     block.free = true
     block.orphaned = false
     block.size = sizefreed
+    heap.allocated -= sizefreed
+
     putback!(heap, block)
     heap.canalloc = true
     return nothing
@@ -484,7 +503,7 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Polyester.@batch per=core for i = 1:4096:sizeof(heap)
+    Polyester.@batch per = core for i = 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
     end
     return nothing

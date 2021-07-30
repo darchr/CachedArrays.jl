@@ -37,7 +37,7 @@ function gctest(manager)
 
     # The cache maanger should now have this array stored at both locations.
     @test inlocal(manager, A)
-    @test inremote(manager, A)
+    @test inremote(manager, A; primary_only = false)
     return nothing
 end
 
@@ -54,17 +54,17 @@ end
 
     # Run the GC test, then run garbage collection.
     gctest(manager)
+    @test CachedArrays.check(manager)
     GC.gc(true)
     CachedArrays.cangc(manager)
+    @test CachedArrays.check(manager)
 
     # Wrap this body of code in a "let" block to ensure that GC will clean up any temporary
     # arrays created in the body.
     let
-        @test length(manager.localmap) == 0
-        @test length(manager.remotemap) == 0
-        @test CachedArrays.getsize(manager.localmap) == 0
-        @test CachedArrays.getsize(manager.remotemap) == 0
-
+        Local, Remote = CachedArrays.Local, CachedArrays.Remote
+        @test length(CachedArrays.visible_ids(manager, Local; primary_only = true)) == 0
+        @test length(CachedArrays.visible_ids(manager, Remote; primary_only = true)) == 0
         # Okay, now start doing some operations on arrays.
         len = 2_000_000
         A = CachedArray{Float32}(undef, manager, len; status = CachedArrays.ReadWrite())
@@ -78,13 +78,14 @@ end
 
         @test inlocal(manager, A)
         @test inlocal(manager, B)
-        @test CachedArrays.getsize(manager.remotemap) == 0
+        #@test CachedArrays.getsize(manager.remotemap) == 0
 
         # Do a broadcasting add - make sure the newly created object is a CachedArray
         # and that it gets registered with the cache.
         C = A .+ B
         @test isa(C, CachedArray)
-        @test length(manager.localmap) == 3
+        @test length(CachedArrays.visible_ids(manager, Local; primary_only = true)) == 3
+
         @test inlocal(manager, A)
         @test inlocal(manager, B)
         @test inlocal(manager, C)

@@ -1,3 +1,9 @@
+# TODO: Finalize API...
+function telemetry_alloc end
+function telemetry_gc end
+function telemetry_change end
+function telemetry_move end
+
 #####
 ##### Telemetry
 #####

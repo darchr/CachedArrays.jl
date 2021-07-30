@@ -15,60 +15,96 @@ function check(manager::CacheManager)
         passed = false
     end
 
-    # Now - check if the manager's recorded stats align with the each of the heaps.
-    # Remote Heap
-    seen_ids = Set{UInt64}()
-    size_allocated = 0
+    #####
+    ##### Blocks allocated by heaps
+    #####
+
+    remote_ids = Set{UInt64}()
+    remote_size_allocated = 0
     for block in manager.remote_heap
         if !isfree(block)
-            push!(seen_ids, CachedArrays.getid(block))
-            size_allocated += length(block)
+            push!(remote_ids, CachedArrays.getid(block))
+            remote_size_allocated += length(block)
         end
     end
-    if getsize(manager.remotemap) != size_allocated
-        println(
-            """
-            Manager and heap Remote objects size mismatch.
-            Manager sees: $(getsize(manager.remotemap)). Heap sees: $size_allocated.
-            """
-        )
-        println(
-            "    Difference: $(Int.(sort(collect(setdiff(seen_ids, keys(manager.remotemap))))))",
-        )
-        passed = false
-    end
 
-    issubset(seen_ids, keys(manager.remotemap)) || (passed = false)
-    issubset(keys(manager.remotemap), seen_ids) || (passed = false)
-
-    # Local Heap
-    seen_ids = Set{UInt64}()
-    size_allocated = 0
+    local_ids = Set{UInt64}()
+    local_size_allocated = 0
     for block in manager.local_heap
         if !isfree(block)
-            push!(seen_ids, CachedArrays.getid(block))
-            size_allocated += length(block)
+            push!(local_ids, CachedArrays.getid(block))
+            local_size_allocated += length(block)
         end
     end
-    if getsize(manager.localmap) != size_allocated
-        println(
-            "Manager and heap Local objects size mismatch. Manager sees: $(getsize(manager.localmap)). Heap sees: $size_allocated.",
-        )
-        println("    Manager IDS: $(Int.(sort(collect(keys(manager.local_objects)))))")
-        println("    Heap IDS: $(Int.(sort(collect(seen_ids))))")
+
+    #####
+    ##### Blocks visible from the manager
+    #####
+
+    manager_local_ids = Set{UInt64}()
+    manager_remote_ids = Set{UInt64}()
+
+    for (id, backedge) in manager.map.dict
+        block = unsafe_block(unsafe_load(backedge))
+        id = getid(block)
+        pool = getpool(block)
+
+        set = pool == Local ? manager_local_ids : manager_remote_ids
+        other = pool == Local ? manager_remote_ids : manager_local_ids
+        push!(set, id)
+        sibling = getsibling(block)
+        if sibling !== nothing
+            # Sanity checks.
+            if getsibling(sibling) !== block
+                println("Non-symmetrical linking between the following siblings:")
+                println(block)
+                println(sibling)
+                passed = false
+            end
+
+            if getid(sibling) != id
+                println("Non-symmetrical id between the following siblings:")
+                println(block)
+                println(sibling)
+                passed = false
+            end
+
+            if getpool(sibling) == pool
+                println("Non-symmetrical pool between the following siblings:")
+                println(block)
+                println(sibling)
+                passed = false
+            end
+
+            if length(sibling) != length(block)
+                println("Non-symmetrical length between the following siblings:")
+                println(block)
+                println(sibling)
+                passed = false
+            end
+            push!(other, id)
+        end
+    end
+
+    if !issubset(manager_local_ids, local_ids)
+        println("Heap local IDs not a subset of Manager local ids!")
         passed = false
     end
 
-    if !issubset(seen_ids, keys(manager.localmap))
-        println(
-            "Manager sees $(length(manager.localmap)) in Local. Heap sees $(length(seen_ids))",
-        )
+    if !issubset(local_ids, manager_local_ids)
+        println("Manager local ids not a subset of heap ids!")
         passed = false
     end
-    if !issubset(keys(manager.localmap), seen_ids)
-        println(
-            "Manager sees $(length(manager.localmap)) in Local. Heap sees $(length(seen_ids))",
-        )
+
+    if !issubset(manager_remote_ids, remote_ids)
+        println("Heap remote IDs not a subset of Manager remote ids!")
+        passed = false
+    end
+
+    if !issubset(remote_ids, manager_remote_ids)
+        println("Manager remote ids not a subset of heap ids!")
+        @show setdiff(remote_ids, manager_remote_ids)
+        @show setdiff(manager_remote_ids, remote_ids)
         passed = false
     end
 

@@ -104,10 +104,10 @@ include("allocators.jl")
 include("memory/memory.jl")
 
 # Cache eviction policies
+include("policy/lru.jl")
 include("policy/policy.jl")
 
 # Implementation of the arrays and cache manager
-include("managers/heapmanager.jl")
 include("managers/cachemanager.jl")
 include("managers/validation.jl")
 
@@ -116,7 +116,6 @@ include("llvm.jl")
 using .LoadStore: LoadStore
 
 include("arrays/cachedarray.jl")
-include("arrays/heaparray.jl")
 include("telemetry/telemetry.jl")
 
 # Fast "memcpy"

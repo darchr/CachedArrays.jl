@@ -5,94 +5,47 @@ end
 
 Base.isless(a::P, b::P) where {P <: Priority} = isless(a.priority, b.priority)
 Base.:(==)(a::P, b::P) where {P <: Priority} = a.priority == b.priority
-Base.hash(a::Priority, h::UInt = UInt(0x0)) = hash(a.priority, h)
-
-getval(::Type{T}, x::Priority{T}) where {T} = x.val
+Base.hash(a::Priority, h::UInt = UInt(0x78907890)) = hash(a.priority, h)
+unwrap(x::Priority) = x.val
 
 # LRU Policy for eviction.
+const MutableMinHeap{T} = DataStructures.MutableBinaryHeap{T,Base.ForwardOrdering}
 mutable struct LRU{T}
-    count::Int
-
-    # Wrap around a mutable binary heap.
-    heap::DataStructures.MutableBinaryHeap{Priority{T}, Base.ForwardOrdering}
-    # Map items to their handles
+    heap::MutableMinHeap{Priority{T}}
     handles::Dict{T,Int}
 end
 
-function LRU{T}() where {T}
-    return LRU(
-        0,
-        DataStructures.MutableBinaryMinHeap{Priority{T}}(),
-        Dict{T,Int}(),
-    )
-end
-
-Base.eltype(::LRU{T}) where {T} = T
-fulleltype(::LRU{T}) where {T} = Priority{T}
-
+LRU{T}() where {T} = LRU(MutableMinHeap{Priority{T}}(), Dict{T,Int}())
 Base.isempty(lru::LRU) = isempty(lru.heap)
+Base.length(lru::LRU) = length(lru.heap)
 
-"""
-    pop!(C::LRU)
-
-Remove the least recently used item from the cache and return it.
-"""
-function Base.pop!(C::LRU)
-    # Pop items off the top of the heap.
-    # Keep doing this as long as we are getting sentinels.
-    v = pop!(C.heap)
-    delete!(C.handles, v.val)
+function Base.pop!(lru::LRU)
+    v = pop!(lru.heap)
+    delete!(lru.handles, v.val)
     return v.val
 end
 
-function fullpop!(C::LRU)
-    v = pop!(C.heap)
-    delete!(C.handles, v.val)
-    return v
-end
-
-function Base.push!(C::LRU{T}, v::T, pool) where {T}
-    pool == Remote && return v
+function Base.push!(lru::LRU{T}, v::T, priority::Int) where {T}
     # Assert this for now.
-    @check !haskey(C.handles, v)
+    @check !haskey(lru.handles, v)
 
     # Add this to the heap and record its handle.
-    C.handles[v] = push!(C.heap, Priority(C.count, v))
-    C.count += 1
+    lru.handles[v] = push!(lru.heap, Priority(priority, v))
     return v
 end
 
-function Base.push!(C::LRU{T}, v::Priority{T}) where {T}
-    @check !haskey(C.handles, v.val)
-    C.handles[v.val] = push!(C.heap, v)
-    return v
+Base.first(lru::LRU) = unwrap(first(lru.heap))
+
+function update!(lru::LRU{T}, v::T, priority::Int) where {T}
+    handle = lru.handles[v]
+    DataStructures.update!(lru.heap, handle, Priority(priority, v))
 end
 
-"""
-    update!(C::LRU, v)
-
-Update `v` to the bottom of the heap.
-"""
-function update!(C::LRU, v)
-    delete!(C.heap, C.handles[v])
-    C.handles[v] = push!(C.heap, Priority(C.count, v))
-    C.count += 1
+function Base.delete!(lru::LRU{T}, v::T) where {T}
+    delete!(lru.heap, lru.handles[v])
+    delete!(lru.handles, v)
+    return lru
 end
 
-"""
-    delete!(C::LRUManager, v)
-
-Delete `v` from the cache.
-
-This is assumed to be a user-invoked method and the callback will **NOT** be called on
-the removed item.
-"""
-function Base.delete!(C::LRU, v)
-    in(v, C) || return nothing
-    delete!(C.heap, C.handles[v])
-    delete!(C.handles, v)
-    return C
-end
-
-Base.in(v, C::LRU) = haskey(C.handles, v)
+Base.in(v::T, lru::LRU{T}) where {T} = haskey(lru.handles, v)
 
