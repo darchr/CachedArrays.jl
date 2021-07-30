@@ -209,6 +209,8 @@ end
 
 setsibling!(x::Block, y::Block) = (x.sibling = y)
 setsibling!(x::Block, ::Nothing) = (x.sibling = Block())
+link!(x::Block, y::Block) = (x.sibling, y.sibling) = (y, x)
+unlink!(x::Block, y::Block) = (x.sibling, y.sibling) = (Block(), Block())
 
 @inline markqueued!(x::Block) = (x.queued = true)
 @inline isqueued(x::Block) = x.queued

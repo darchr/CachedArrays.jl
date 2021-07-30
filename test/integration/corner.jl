@@ -14,7 +14,7 @@
         # Run finalizers on the `Region` backing `_a`.
         # This will put it on the manager's freebuffer.
         # Don't use `_a` after this operation.
-        finalize(_a.region)
+        finalize(_a.object)
 
         # When we manually invoke an eviction, the manager will discover during allocation
         # that this object is queued to be freed.
@@ -48,7 +48,7 @@
         # Run finalizers on the `Region` backing `_a`.
         # This will put it on the manager's freebuffer.
         # Don't use `_a` after this operation.
-        finalize(_a.region)
+        finalize(_a.object)
 
         # When we manually invoke an eviction, the manager will discover during allocation
         # that this object is queued to be freed.
