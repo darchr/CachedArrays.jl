@@ -15,8 +15,8 @@ mutable struct OptaneTracker{N}
     vectorcache::ObjectCache{Vector{Int},Tuple{}}
 
     # Objects that live in the local heap that haven't been marked as easily evictable.
-    regular_objects::NTuple{N, LRU{Block}}
-    evictable_objects::NTuple{N, LRU{Block}}
+    regular_objects::NTuple{N,LRU{Block}}
+    evictable_objects::NTuple{N,LRU{Block}}
 
     # For critical regions with concurrent allocations
     movement_enabled::Bool
@@ -166,7 +166,8 @@ function prefetch!(A, policy::OptaneTracker, manager)
     isqueued(block) && return nothing
     # Allocate and move.
     # Don't free the old block since we're functioning as a cache.
-    newblock = unsafe_block(unsafe_alloc_direct(LocalPool(), manager, length(block), getid(block)))
+    newblock =
+        unsafe_block(unsafe_alloc_direct(LocalPool(), manager, length(block), getid(block)))
     copyto!(newblock, block, manager)
     link!(newblock, block)
     result = setprimary!(manager, block, newblock)
@@ -228,7 +229,9 @@ function eviction_callback(manager, policy, block::Block)
         return nothing
     end
 
-    newblock = unsafe_block(unsafe_alloc_direct(RemotePool(), manager, length(block), getid(block)))
+    newblock = unsafe_block(
+        unsafe_alloc_direct(RemotePool(), manager, length(block), getid(block)),
+    )
     copyto!(newblock, block, manager)
     result = setprimary!(manager, block, newblock)
 
@@ -259,7 +262,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     localheap = getheap(manager, LocalPool())
 
     # Check this bin and all higher bins.
-    for i in bin:N
+    for i = bin:N
         lru = policy.evictable_objects[bin]
         if !isempty(lru)
             block = first(lru)
@@ -270,7 +273,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     end
 
     # Try evicting not from the easily evictable trackers.
-    for i in bin:N
+    for i = bin:N
         lru = policy.regular_objects[bin]
         if !isempty(lru)
             block = first(lru)
