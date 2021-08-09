@@ -54,24 +54,24 @@ function prefetch!(::Cacheable, A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) begin
         maybe_cleanup!(_manager)
-        prefetch!(A, _manager.policy, _manager)
+        prefetch!(metadata(A), _manager.policy, _manager; readonly = isreadonly(A))
     end
 end
 
-function shallowfetch!(::Cacheable, A; kw...)
-    _manager = manager(A)
-    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        actuate!(
-            LocalPool(),
-            A,
-            _manager;
-            copydata = false,
-            updatebackedge = true,
-            freeblock = false,
-            kw...,
-        )
-    end
-end
+# function shallowfetch!(::Cacheable, A; kw...)
+#     _manager = manager(A)
+#     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+#         actuate!(
+#             LocalPool(),
+#             A,
+#             _manager;
+#             copydata = false,
+#             updatebackedge = true,
+#             freeblock = false,
+#             kw...,
+#         )
+#     end
+# end
 
 function evict!(::Cacheable, A; kw...)
     _manager = manager(A)
@@ -86,6 +86,22 @@ function softevict!(::Cacheable, A)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) softevict!(_manager.policy, _manager, metadata(A))
 end
+
+# function _unsafe_track!(manager)
+#     token = @spinlock alloc_lock(manager) begin
+#         _unsafe_track!(manager.policy)
+#     end
+#     return token
+# end
+#
+# function _unsafe_untrack!(manager, token, return_value)
+#     # Optimization - check before acquiring the lock
+#     token == false && return nothing
+#     @spinlock alloc_lock(manager) begin
+#         _unsafe_untrack!(manager, manager.policy, token, return_value)
+#     end
+#     return nothing
+# end
 
 # TODO: This is such a hack ...
 unsafe_free(::Cacheable, A) = unsafe_free(A.region)

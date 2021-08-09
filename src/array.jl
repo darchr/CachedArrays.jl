@@ -45,6 +45,9 @@ const WritableCachedArray{T,N} = CachedArray{T,N,<:Writable,<:Any}
 const UnwritableCachedArray{T,N} = CachedArray{T,N,<:Union{NotBusy,ReadOnly},<:Any}
 const BusyCachedArray{T,N} = CachedArray{T,N,<:Union{ReadOnly,ReadWrite},<:Any}
 
+isreadonly(::CachedArray) = false
+isreadonly(::UnwritableCachedArray) = true
+
 # Cached API
 object(A::CachedArray) = A.object
 metastyle(::CachedArray) = BlockMeta()
@@ -118,9 +121,9 @@ function Base.similar(
     eltyp::Type{T} = eltype(A),
     dims::Tuple{Vararg{Int,N}} = size(A);
     status = ReadWrite(),
-    priority = PreferLocal,
+    priority = ForceLocal,
 ) where {T,N}
-    CachedArray{T}(undef, manager(A), dims; status = status, priority = priority)
+    return CachedArray{T}(undef, manager(A), dims; status = status, priority = priority)
 end
 
 function Base.iterate(A::ReadableCachedArray, i::Int = 1)

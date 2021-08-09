@@ -266,6 +266,9 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     block.id = id
     block.pool = heap.pool
 
+    # Preemptively mark as dirty.
+    # Up to callee's to determine if this is actually clean or not.
+    block.dirty = true
     ptr = pointer(block) + headersize()
     return ptr
 end

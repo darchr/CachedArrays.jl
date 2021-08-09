@@ -3,7 +3,7 @@
 #####
 
 const RECONSTRUCTING_KEYWORDS = [:readable, :writable, :release]
-const FORWARDING_KEYWORDS = [:prefetch!, :softevict!, :evict!, :unsafe_free]
+const FORWARDING_KEYWORDS = [:prefetch!, :softevict!, :evict!, :unsafe_free, :_unsafe_track!, :_unsafe_untrack!]
 
 const KEYWORDS = vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
 
@@ -12,6 +12,9 @@ for keyword in KEYWORDS
     @eval $keyword(x::CachedArray) = $keyword(Cacheable(), x)
     @eval $keyword(x, y, z...) = foreach($keyword, (x, y, z...,))
 end
+
+children(x) = ()
+children(x::Union{Tuple,AbstractArray}) = x
 
 # Helper functions for when we need to recurse using "Base.invoke"
 maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
@@ -79,14 +82,22 @@ macro wrapper(typ, fields...)
         $_f(x::$typ) = _maybesuper(x, $(accessors...))
     end
 
+    # Define accessor method for children array fields
+    _f = makecall(:children)
+    children = quote
+        $_f(x::$typ) = ($(accessors...),)
+    end
+
     return quote
         $(overloads...)
         $maybesuper
+        $children
         # $_expand
     end
 end
 
 @wrapper LinearAlgebra.Transpose parent
+@wrapper Base.SubArray parent
 @wrapper Base.ReshapedArray parent
 
 #####
@@ -97,17 +108,6 @@ end
 macro annotate(fn)
     return annotate_impl(fn)
 end
-
-# const CACHEDARRAY_KEYWORDS = [
-#     # Hints
-#     "prefetch!",
-#     "evict!",
-#     "softevict",
-#     "unsafe_free",
-#     "readable",
-#     "writable",
-#     "release",
-# ]
 
 function maybe_process_call(sym::Symbol)
     symstring = String(sym)
@@ -217,5 +217,21 @@ function prepare_function(expr::Expr)
     def[:kwargs] = esc.(def[:kwargs])
 
     return def, oldargs
+end
+
+#####
+##### For analyzing arbitrary structs.
+#####
+
+onblocks(f::F, x::AbstractArray{<:AbstractArray}) where {F} = foreach(x -> onblocks(f, x), x)
+onblocks(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onblocks(f, x), x)
+onblocks(f::F, x::CachedArray) where {F} = f(metadata(x))
+
+@generated function onblocks(f::F, x::T) where {F,T}
+    iszero(fieldcount(T)) && return :(nothing)
+    exprs = [:(onblocks(f, (x.$fieldname))) for fieldname in fieldnames(T)]
+    return quote
+        $(exprs...)
+    end
 end
 

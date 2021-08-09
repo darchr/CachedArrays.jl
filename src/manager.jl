@@ -250,8 +250,10 @@ end
     # a null pointer, in which case we definitely don't want to add this to the
     # free buffer.
     function free(manager::CacheManager, ptr::Ptr)
-        isnull(ptr) || push!(manager.freebuffer, unsafe_block(ptr))
+        isnull(ptr) || free(manager, unsafe_block(ptr))
     end
+
+    free(manager::CacheManager, block::Block) = push!(manager.freebuffer, block)
 
     # TODO: What if this is called while movement is happening ...
     function unsafe_free(object::Object)
@@ -287,6 +289,14 @@ function setprimary!(manager::CacheManager, current::Block, next::Block; unsafe 
     old = atomic_ptr_xchg!(backedge, datapointer(next))
 
     # Check that in fact the passed `current` block IS the primary segbment.
+    @check old == datapointer(current)
+    return old
+end
+
+function unsafe_clearprimary!(manager::CacheManager, current::Block)
+    isqueued(current) && return nothing
+    backedge = getmap(manager, getid(current))
+    old = atomic_ptr_xchg!(backedge, Ptr{Nothing}())
     @check old == datapointer(current)
     return old
 end
