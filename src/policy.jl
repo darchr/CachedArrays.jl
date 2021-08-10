@@ -134,11 +134,11 @@ function policy_new_alloc(
 
     # Fallback path - allocate remotely.
     # If we're getting close to filling up the remote pool, do an emergency full GC.
-    # allocated, total = getstate(getheap(manager, RemotePool()))
-    # if allocated / total >= 0.80
-    #     # Trigger full GC and try to get pending finalizers to run.
-    #     GC.gc(true)
-    # end
+    allocated, total = getstate(getheap(manager, RemotePool()))
+    if allocated / total >= 0.80
+        # Trigger full GC and try to get pending finalizers to run.
+        GC.gc(true)
+    end
 
     @return_if_exists ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
     error("Ran out of memory!")
@@ -155,7 +155,7 @@ function defrag!(manager, policy::OptaneTracker = manager.policy)
         # This may change ...
         primary = getprimary(manager, oldblock)
         if primary === oldblock
-            old = setprimary!(manager, oldblock, newblock; unsafe = true)
+            old = unsafe_setprimary!(manager, oldblock, newblock; unsafe = true)
             @check delete!(policy, oldblock; len = length(oldblock))
             push!(policy, newblock, pool; len = length(oldblock))
         end
@@ -180,7 +180,7 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
     copyto!(newblock, block, manager)
     link!(newblock, block)
 
-    result = setprimary!(manager, block, newblock)
+    result = unsafe_setprimary!(manager, block, newblock)
     if result === nothing
         unsafe_free_direct(manager, newblock)
     else
@@ -231,7 +231,7 @@ function eviction_callback(manager, policy, block::Block)
     sibling = getsibling(block)
     if sibling !== nothing
         isdirty(block) && copyto!(sibling, block, manager)
-        result = setprimary!(manager, block, sibling)
+        result = unsafe_setprimary!(manager, block, sibling)
         if result !== nothing
             unlink!(block, sibling)
             @check delete!(policy, block)
@@ -248,7 +248,7 @@ function eviction_callback(manager, policy, block::Block)
 
     newblock = unsafe_block(ptr)
     copyto!(newblock, block, manager)
-    result = setprimary!(manager, block, newblock)
+    result = unsafe_setprimary!(manager, block, newblock)
 
     # Setting primary failed because the current block is queued for freeing.
     # Roll back our change.

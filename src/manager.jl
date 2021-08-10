@@ -103,17 +103,17 @@ function Base.show(io::IO, M::CacheManager)
     allocated, total = getstate(M.local_heap) ./ 1E9
     println(io, "    Local Heap utilization: $allocated of $total ($(allocated / total) %)")
     allocated, total = getstate(M.remote_heap) ./ 1E9
-    println(io, "    Remote Heap utilization: $allocated of $total ($(allocated / total) %)")
+    println(
+        io,
+        "    Remote Heap utilization: $allocated of $total ($(allocated / total) %)",
+    )
 end
 
 #####
 ##### Object (De)Registration
 #####
 
-function unsafe_register!(
-    manager::CacheManager,
-    object::Object,
-) where {T}
+function unsafe_register!(manager::CacheManager, object::Object) where {T}
     @requires alloc_lock(manager)
     block = metadata(object)
     set!(getmap(manager), backedge(object), getid(block), length(block))
@@ -121,10 +121,7 @@ function unsafe_register!(
     return nothing
 end
 
-function unsafe_unregister!(
-    manager::CacheManager,
-    block::Block,
-) where {T}
+function unsafe_unregister!(manager::CacheManager, block::Block) where {T}
     @requires alloc_lock(manager)
     delete!(getmap(manager), getid(block), length(block))
     delete!(manager.policy, block)
@@ -234,7 +231,9 @@ function alloc(
 )
     @spinlock alloc_lock(manager) begin
         # TODO: What to do about zero sized allocations ...
-        ptr = iszero(bytes) ? Ptr{Nothing}() : unsafe_alloc_through_policy(manager, bytes, priority, id)
+        ptr =
+            iszero(bytes) ? Ptr{Nothing}() :
+            unsafe_alloc_through_policy(manager, bytes, priority, id)
         return Object(ptr, manager)
     end
 end
@@ -279,7 +278,12 @@ Switch a primary segment from `current` to `next`.
 This operation may fail if `current` has been garbage collected.
 If this is the case, this function will return `nothing`.
 """
-function setprimary!(manager::CacheManager, current::Block, next::Block; unsafe = false)
+function unsafe_setprimary!(
+    manager::CacheManager,
+    current::Block,
+    next::Block;
+    unsafe = false,
+)
     # Need to check if the current is queued for cleanup.
     # If so, this means that the backedge is invalid.
     isqueued(current) && return nothing
