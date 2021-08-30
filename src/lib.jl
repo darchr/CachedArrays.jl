@@ -219,19 +219,19 @@ function prepare_function(expr::Expr)
     return def, oldargs
 end
 
-#####
-##### For analyzing arbitrary structs.
-#####
-
-onblocks(f::F, x::AbstractArray{<:AbstractArray}) where {F} = foreach(x -> onblocks(f, x), x)
-onblocks(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onblocks(f, x), x)
-onblocks(f::F, x::CachedArray) where {F} = f(metadata(x))
-
-@generated function onblocks(f::F, x::T) where {F,T}
-    iszero(fieldcount(T)) && return :(nothing)
-    exprs = [:(onblocks(f, (x.$fieldname))) for fieldname in fieldnames(T)]
-    return quote
-        $(exprs...)
-    end
-end
+# #####
+# ##### For analyzing arbitrary structs.
+# #####
+#
+# onblocks(f::F, x::AbstractArray{<:AbstractArray}) where {F} = foreach(x -> onblocks(f, x), x)
+# onblocks(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onblocks(f, x), x)
+# onblocks(f::F, x::CachedArray) where {F} = f(metadata(x))
+#
+# @generated function onblocks(f::F, x::T) where {F,T}
+#     iszero(fieldcount(T)) && return :(nothing)
+#     exprs = [:(onblocks(f, (x.$fieldname))) for fieldname in fieldnames(T)]
+#     return quote
+#         $(exprs...)
+#     end
+# end
 

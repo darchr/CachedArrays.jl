@@ -103,13 +103,13 @@ end
         CachedArrays.link!(block_remote, block_local)
         @test CachedArrays.getsibling(block_remote) === block_local
         @test CachedArrays.getsibling(block_local) === block_remote
-        old_ptr = CachedArrays.setprimary!(manager, block_local, block_remote)
+        old_ptr = CachedArrays.unsafe_setprimary!(manager, block_local, block_remote)
         @test CachedArrays.unsafe_block(old_ptr) === block_local
 
         # Load the updated block from the backedge to ensure that we did in fact
         # update the backedge.
         map = CachedArrays.getmap(manager)
-        new_block = CachedArrays.unsafe_block(unsafe_load(map[getid(block_remote)]))
+        new_block = CachedArrays.unsafe_block(unsafe_load(last(map[getid(block_remote)])))
         @test block_remote === new_block
         @test CachedArrays.check(manager)
     end
@@ -131,7 +131,7 @@ end
         )
         block_remote = CachedArrays.unsafe_block(ptr_remote)
         CachedArrays.link!(block, block_remote)
-        @test CachedArrays.setprimary!(manager, block, block_remote) === nothing
+        @test CachedArrays.unsafe_setprimary!(manager, block, block_remote) === nothing
 
         # Now, if we drain the manager, both the local and remote blocks should be
         # cleaned because we linked them.

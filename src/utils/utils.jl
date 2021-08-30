@@ -177,50 +177,49 @@ function alloc(
     return alloc(manager(object), bytes, priority, id)
 end
 
-#####
-##### Backedges
-#####
-
-# Back edges from the manager to the GC managed object holding a block.
-# Kept as a raw Ptr{Ptr} to avoid GC cycles.
-const Backedge = Ptr{Ptr{Nothing}}
-unsafe_block(backedge::Backedge) = unsafe_block(unsafe_load(backedge))
-
-backedge(x::Backedge) = x
-backedge(x::Ptr) = convert(Backedge, x)
-backedge(x) = backedge(blockpointer(x))
-
-mutable struct BackedgeMap
-    dict::Dict{UInt,Backedge}
-    size::Int
-end
-
-BackedgeMap() = BackedgeMap(Dict{UInt,Backedge}(), 0)
-
-Base.getindex(map::BackedgeMap, id) = map.dict[id]
-function set!(map::BackedgeMap, backedge::Backedge, id, sz::Integer)
-    @check !in(id, map)
-    map.dict[id] = backedge
-    map.size += sz
-    return backedge
-end
-
-function Base.delete!(map::BackedgeMap, id::UInt, sz::Integer)
-    delete!(map.dict, id)
-    @check map.size >= sz
-    map.size -= sz
-    return nothing
-end
-
-getsize(map::BackedgeMap) = map.size
-Base.in(id, map::BackedgeMap) = haskey(map.dict, id)
-Base.haskey(map::BackedgeMap, id) = haskey(map.dict, id)
-Base.length(map::BackedgeMap) = length(map.dict)
-Base.isempty(map::BackedgeMap) = isempty(map.dict)
-Base.keys(map::BackedgeMap) = keys(map.dict)
-
-Base.iterate(map::BackedgeMap, s...) = iterate(map.dict, s...)
-
+# #####
+# ##### Backedges
+# #####
+#
+# # Back edges from the manager to the GC managed object holding a block.
+# # Kept as a raw Ptr{Ptr} to avoid GC cycles.
+# const Backedge = Ptr{Ptr{Nothing}}
+# unsafe_block(backedge::Backedge) = unsafe_block(unsafe_load(backedge))
+#
+# backedge(x::Backedge) = x
+# backedge(x::Ptr) = convert(Backedge, x)
+# backedge(x) = backedge(blockpointer(x))
+#
+# mutable struct BackedgeMap
+#     dict::Dict{UInt,Backedge}
+#     size::Int
+# end
+#
+# BackedgeMap() = BackedgeMap(Dict{UInt,Backedge}(), 0)
+#
+# Base.getindex(map::BackedgeMap, id) = map.dict[id]
+# function set!(map::BackedgeMap, backedge::Backedge, id, sz::Integer)
+#     @check !in(id, map)
+#     map.dict[id] = backedge
+#     map.size += sz
+#     return backedge
+# end
+#
+# function Base.delete!(map::BackedgeMap, id::UInt, sz::Integer)
+#     delete!(map.dict, id)
+#     @check map.size >= sz
+#     map.size -= sz
+#     return nothing
+# end
+#
+# getsize(map::BackedgeMap) = map.size
+# Base.in(id, map::BackedgeMap) = haskey(map.dict, id)
+# Base.haskey(map::BackedgeMap, id) = haskey(map.dict, id)
+# Base.length(map::BackedgeMap) = length(map.dict)
+# Base.isempty(map::BackedgeMap) = isempty(map.dict)
+# Base.keys(map::BackedgeMap) = keys(map.dict)
+#
+# Base.iterate(map::BackedgeMap, s...) = iterate(map.dict, s...)
 
 # #####
 # ##### GC Callbacks

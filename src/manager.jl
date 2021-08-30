@@ -2,6 +2,54 @@ const RemotePool = PoolType{Remote}
 const LocalPool = PoolType{Local}
 
 #####
+##### Backedges
+#####
+
+# Back edges from the manager to the GC managed object holding a block.
+# Kept as a raw Ptr{Ptr} to avoid GC cycles.
+const Backedge = Ptr{Ptr{Nothing}}
+unsafe_block(backedge::Backedge) = unsafe_block(unsafe_load(backedge))
+
+backedge(x::Backedge) = x
+backedge(x::Ptr) = convert(Backedge, x)
+backedge(x) = backedge(blockpointer(x))
+
+mutable struct BackedgeMap
+    dict::Dict{UInt,Tuple{Block,Backedge}}
+    size::Int
+end
+
+BackedgeMap() = BackedgeMap(Dict{UInt,Backedge}(), 0)
+
+Base.getindex(map::BackedgeMap, id) = map.dict[id]
+Base.setindex!(map::BackedgeMap, bb::Tuple{Block,Backedge}, id) = setindex!(map.dict, bb, id)
+function set!(map::BackedgeMap, block::Block, backedge::Backedge)
+    id = getid(block)
+    sz = length(block)
+
+    @check !in(id, map)
+    map.dict[id] = (block, backedge)
+    map.size += sz
+    return backedge
+end
+
+function Base.delete!(map::BackedgeMap, id::UInt, sz::Integer)
+    delete!(map.dict, id)
+    @check map.size >= sz
+    map.size -= sz
+    return nothing
+end
+
+getsize(map::BackedgeMap) = map.size
+Base.in(id, map::BackedgeMap) = haskey(map.dict, id)
+Base.haskey(map::BackedgeMap, id) = haskey(map.dict, id)
+Base.length(map::BackedgeMap) = length(map.dict)
+Base.isempty(map::BackedgeMap) = isempty(map.dict)
+Base.keys(map::BackedgeMap) = keys(map.dict)
+
+Base.iterate(map::BackedgeMap, s...) = iterate(map.dict, s...)
+
+#####
 ##### Cache Manager
 #####
 
@@ -57,8 +105,8 @@ mb(x) = x * 1_000_000
 function CacheManager(
     local_allocator,
     remote_allocator;
-    localsize = 1_000_000_000,
-    remotesize = 1_000_000_000,
+    localsize = mb(1_000),
+    remotesize = mb(1_000),
     gc_when_over = 0.95,
     minallocation = 10,
     policy = OptaneTracker((2^minallocation,)),
@@ -116,7 +164,7 @@ end
 function unsafe_register!(manager::CacheManager, object::Object) where {T}
     @requires alloc_lock(manager)
     block = metadata(object)
-    set!(getmap(manager), backedge(object), getid(block), length(block))
+    set!(getmap(manager), block, backedge(object))
     push!(manager.policy, block)
     return nothing
 end
@@ -143,9 +191,18 @@ function unsafe_free_direct(manager::CacheManager, block::Block)
     return nothing
 end
 
-function unsafe_alloc_direct(pool::PoolType, manager::CacheManager, bytes, id::UInt)
+function unsafe_alloc_direct(
+    pool::PoolType{T},
+    manager::CacheManager,
+    bytes,
+    id::UInt,
+) where {T}
     @requires alloc_lock(manager)
-    return alloc(getheap(manager, pool), bytes, id)
+    ptr = alloc(getheap(manager, pool), bytes, id)
+    if ptr !== nothing
+        @telemetry manager telemetry_alloc(gettelemetry(manager), manager, bytes, id, ptr, T)
+    end
+    return ptr
 end
 
 function direct_alloc(pool::PoolType, manager::CacheManager, bytes, id::UInt)
@@ -180,6 +237,10 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
         # Free all blocks in the cleanlist
         for block in cleanlist
             @check !isfree(block) || block.evicting
+            # safeprint("""
+            # MANAGER: Freeing block
+            # $block
+            # """)
 
             id == getid(block) && (id_cleaned = true)
             @telemetry M telemetry_gc(gettelemetry(M), getid(block))
@@ -188,6 +249,9 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
             if sibling !== nothing
                 @check getid(sibling) == getid(block)
                 @check getpool(sibling) != getpool(block)
+                @check getsibling(sibling) == block
+                #safeprint("MANAGER: Freeing sibling")
+                delete!(M.policy, sibling)
                 unsafe_free_direct(M, sibling)
             end
             unsafe_unregister!(M, block)
@@ -272,7 +336,7 @@ end
 #####
 
 """
-    setprimary!(manager::CacheManager, current::Block, next::Block)::Union{Block, Nothing}
+    unsafe_setprimary!(manager::CacheManager, current::Block, next::Block)::Union{Block, Nothing}
 
 Switch a primary segment from `current` to `next`.
 This operation may fail if `current` has been garbage collected.
@@ -289,24 +353,35 @@ function unsafe_setprimary!(
     isqueued(current) && return nothing
     id = getid(current)
     unsafe || @check getid(next) == id
-    backedge = getmap(manager, id)
-    old = atomic_ptr_xchg!(backedge, datapointer(next))
+    map = getmap(manager)
+    primary, backedge = map[id]
+    @check primary == current
 
-    # Check that in fact the passed `current` block IS the primary segbment.
+    # Small change GC ran. Make sure that `current` is still not queued before comitting.
+    isqueued(current) && return nothing
+    old = atomic_ptr_xchg!(backedge, datapointer(next))
+    map[id] = (next, backedge)
+
+    # Check that in fact the passed `current` block IS the primary segment.
     @check old == datapointer(current)
     return old
 end
 
 function unsafe_clearprimary!(manager::CacheManager, current::Block)
     isqueued(current) && return nothing
-    backedge = getmap(manager, getid(current))
+    id = getid(current)
+    map = getmap(manager)
+
+    _, backedge = map[id]
     old = atomic_ptr_xchg!(backedge, Ptr{Nothing}())
+    map[id] = (Block(), backedge)
+
     @check old == datapointer(current)
     return old
 end
 
 getprimary(manager::CacheManager, block::Block) = getprimary(manager, getid(block))
-getprimary(manager::CacheManager, id::UInt) = unsafe_block(getmap(manager, id))
+getprimary(manager::CacheManager, id::UInt) = first(getmap(manager, id))
 
 #####
 ##### Copyto!
@@ -314,6 +389,13 @@ getprimary(manager::CacheManager, id::UInt) = unsafe_block(getmap(manager, id))
 
 function Base.copyto!(dst::Block, src::Block, manager::CacheManager; include_header = false)
     nthreads = getpool(dst) == Remote ? 4 : Threads.nthreads()
+    @telemetry manager telemetry_move(
+        gettelemetry(manager),
+        getid(src),
+        getpool(dst),
+        sizeof(src),
+    )
+
     if include_header
         _memcpy!(pointer(dst), pointer(src), length(src); nthreads)
     else
@@ -328,7 +410,8 @@ end
 
 function visible_ids(manager::CacheManager, pool; primary_only = false)
     ids = Set{UInt64}()
-    for (id, ptr) in getmap(manager)
+    for (id, bb) in getmap(manager)
+        _, ptr = bb
         block = unsafe_block(ptr)
         sibling = getsibling(block)
         if getpool(block) == pool

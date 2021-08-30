@@ -4,6 +4,8 @@
 
 # Check invariants between the CacheManager and the managed heaps.
 function check(manager::CacheManager)
+    #@spinlock alloc_lock(manager) maybe_cleanup!(manager)
+
     passed = true
     if !check(manager.remote_heap)
         println("Remote Heap failed!")
@@ -44,8 +46,9 @@ function check(manager::CacheManager)
     manager_local_ids = Set{UInt64}()
     manager_remote_ids = Set{UInt64}()
 
-    for (id, backedge) in manager.map.dict
+    for (id, (_, backedge)) in manager.map.dict
         block = unsafe_block(unsafe_load(backedge))
+
         id = getid(block)
         pool = getpool(block)
 

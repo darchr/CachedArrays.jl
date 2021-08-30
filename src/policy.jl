@@ -17,10 +17,6 @@ mutable struct OptaneTracker{N}
     regular_objects::NTuple{N,LRU{Block}}
     evictable_objects::NTuple{N,LRU{Block}}
 
-    # # Data structures for intermediate tracking.
-    # intermediates::Set{Block}
-    # tracking::Bool
-
     # For critical regions with concurrent allocations
     movement_enabled::Bool
 end
@@ -35,10 +31,6 @@ function OptaneTracker(bins::NTuple{N,Int}) where {N}
         bins,
         regular_objects,
         evictable_objects,
-        # # intermediate tracking
-        # Set{Block}(),
-        # false,
-        # scratch
         true,
     )
 end
@@ -70,24 +62,21 @@ function Base.push!(
 )
     # Don't explicitly track remote blocks.
     pool == Remote && return block
+    safeprint("Storing $(address(block))"; force = true)
 
     bin = findbin(policy.bins, len; inbounds = true)
     lru = policy.regular_objects[bin]
     push!(lru, block, increment!(policy))
-    #policy.tracking && push!(policy.intermediates, block)
     return block
 end
 
 function Base.delete!(policy::OptaneTracker, block::Block; len = length(block))
     getpool(block) == Remote && return true
-
-    # Handle intermediates
-    #policy.tracking && delete!(policy.intermediates, block)
+    safeprint("Storing $(address(block))"; force = true)
 
     # TODO: Metadata in block so we don't have to do two searches.
     bin = findbin(policy.bins, len; inbounds = true)
     lru = policy.regular_objects[bin]
-
     if in(block, lru)
         delete!(lru, block)
         return true
@@ -108,8 +97,10 @@ function softevict!(policy::OptaneTracker, manager, block)
     # Is this block in any of the live heaps.
     bin = findbin(policy.bins, length(block); inbounds = true)
     lru = policy.regular_objects[bin]
+    safeprint("POLICY: Softevicting $(address(block))")
     if in(block, lru)
         delete!(lru, block)
+        safeprint("POLICY: Softevict successful")
         push!(policy.evictable_objects[bin], block, increment!(policy))
     end
     return nothing
@@ -127,20 +118,24 @@ function policy_new_alloc(
     id,
     priority::AllocationPriority,
 ) where {N}
+    #safeprint("POLICY: New alloc (id, priority): ($id, $priority)")
     # Can we try to allocate locally?
     if priority != ForceRemote
         @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
     end
+    #safeprint("POLICY: Local Alloc Failed")
 
     # Fallback path - allocate remotely.
     # If we're getting close to filling up the remote pool, do an emergency full GC.
     allocated, total = getstate(getheap(manager, RemotePool()))
     if allocated / total >= 0.80
+        #safeprint("POLICY: Triggering Full GC")
         # Trigger full GC and try to get pending finalizers to run.
         GC.gc(true)
     end
 
     @return_if_exists ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
+    @show manager
     error("Ran out of memory!")
 end
 
@@ -167,25 +162,38 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
     if getpool(block) == Local
         return nothing
     end
+    @check getsibling(block) === nothing
+
+    safeprint("POLICY: Prefetching: $(address(block))")
     bytes = length(block)
     if !canalloc(getheap(manager, LocalPool()), bytes)
         _eviction!(policy, manager, bytes)
     end
 
-    isqueued(block) && return nothing
+    if isqueued(block)
+        safeprint("POLICY: Aborting prefetch - block is queued")
+        return nothing
+    end
     # Allocate and move.
     # Don't free the old block since we're functioning as a cache.
     newblock =
         unsafe_block(unsafe_alloc_direct(LocalPool(), manager, length(block), getid(block)))
     copyto!(newblock, block, manager)
-    link!(newblock, block)
-
     result = unsafe_setprimary!(manager, block, newblock)
     if result === nothing
+        safeprint("POLICY: Aborting prefetch - setprimary! failed")
         unsafe_free_direct(manager, newblock)
     else
         # Need to update the local policy tracking to know that this is now local.
         push!(policy, newblock, Local)
+        link!(newblock, block)
+        # safeprint("""
+        # POLICY: Linking blocks:
+        # ----------
+        # $newblock
+        # ----------
+        # $block
+        # """)
 
         # If this is not a read-only prefetch, then we need to be conservative and mark the
         # prefetched block as dirty.
@@ -209,11 +217,11 @@ end
 
 # TODO: Time since last GC?
 function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
-    allocated, total = getstate(getheap(manager, LocalPool()))
-    if allocated / total >= 0.90
-        # Trigger full GC and try to get pending finalizers to run.
-        GC.gc(false)
-    end
+    # allocated, total = getstate(getheap(manager, LocalPool()))
+    # if allocated / total >= 0.90
+    #     # Trigger full GC and try to get pending finalizers to run.
+    #     GC.gc(false)
+    # end
 
     # If allocation is successful, good!
     @return_if_exists ptr = unsafe_alloc_direct(LocalPool(), manager, bytes, id)
@@ -228,11 +236,14 @@ end
 
 function eviction_callback(manager, policy, block::Block)
     # Copy back to sibling if one already exists.
+    #safeprint("POLICY: Eviction callback on block: $block")
     sibling = getsibling(block)
     if sibling !== nothing
+        safeprint("POLICY: Eviction - found sibling")
         isdirty(block) && copyto!(sibling, block, manager)
         result = unsafe_setprimary!(manager, block, sibling)
         if result !== nothing
+            safeprint("POLICY: setprimary! succeeded")
             unlink!(block, sibling)
             @check delete!(policy, block)
             unsafe_free_direct(manager, block)
@@ -243,6 +254,7 @@ function eviction_callback(manager, policy, block::Block)
     # Rare case where a pointer may be null.
     # In this case, we need to trigger the abort mechanism in the eviciton process so we
     # don't leave the heap in an undefined state.
+    #safeprint("POLICY - Allocating remote memory")
     ptr = unsafe_alloc_direct(RemotePool(), manager, length(block), getid(block))
     ptr === nothing && return true
 
@@ -255,6 +267,7 @@ function eviction_callback(manager, policy, block::Block)
     #
     # Otherwise, setting the primary was successful, so we free the old block.
     if result === nothing
+        safeprint("POLICY: Aborting eviction - setprimary! failed")
         unsafe_free_direct(manager, newblock)
     else
         # For now, make sure that something was actually deleted because it should ALWAYS
@@ -279,7 +292,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     localheap = getheap(manager, LocalPool())
 
     # Check this bin and all higher bins.
-    for i = bin:N
+    for i in bin:N
         lru = policy.evictable_objects[bin]
         if !isempty(lru)
             block = first(lru)
@@ -290,7 +303,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     end
 
     # Try evicting not from the easily evictable trackers.
-    for i = bin:N
+    for i in bin:N
         lru = policy.regular_objects[bin]
         if !isempty(lru)
             block = first(lru)
