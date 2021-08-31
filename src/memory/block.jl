@@ -78,13 +78,22 @@ struct BlockMeta end
 metadata(x, ::BlockMeta) = unsafe_block(unsafe_pointer(x))
 
 # Reserved room in for each allocation.
+# Size is bytes
 headersize() = 64
+
+function zerometa!(block::Block)
+    ptr = Ptr{UInt8}(pointer(block))
+    for i in Base.OneTo(headersize())
+        unsafe_store!(ptr, zero(UInt8), i)
+    end
+    return nothing
+end
 
 mask(x) = one(x) << x
 mask(x, y...) = mask(x) | mask(y...)
 
 macro getbits(typ, ptr, x::Integer...)
-    # Precomput the mask and minimum value
+    # Precompute the mask and minimum value
     msk = mask(x...)
     min = minimum(x)
     return :((unsafe_load(convert(Ptr{$typ}, $(esc(ptr)))) & $msk) >> $min)

@@ -212,11 +212,12 @@ function putback!(heap::CompactHeap, block::Block)
     previous = walkprevious(heap, block)
     next = walknext(heap, block)
 
-    # If the block before this one is being evicted, we don't want to merge since that
-    # will break upstream logic.
     if previous !== nothing && isfree(previous)
         remove!(heap, previous)
         previous.size += block.size
+
+        # Purge metadata for this block to try and catch errors earlier.
+        zerometa!(block)
         block = previous
     end
 
@@ -232,6 +233,9 @@ function putback!(heap::CompactHeap, block::Block)
             if nextnext !== nothing
                 nextnext.backsize = block.size
             end
+
+            # Purge metadata for the next block to try and catch errors earlier.
+            zerometa!(next)
         else
             next.backsize = block.size
         end

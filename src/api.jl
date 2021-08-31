@@ -53,8 +53,14 @@ pool(A) = getpool(metadata(A))
 function prefetch!(::Cacheable, A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) begin
-        maybe_cleanup!(_manager)
-        prefetch!(metadata(A), _manager.policy, _manager; readonly = isreadonly(A))
+        block = metadata(A)
+        # Possibility that `maybe_cleanup!` cleans up this block.
+        # Presumeably, this can't happen since we have `A` and `A` is holding onto the
+        # object that owns this block ... so it should never have been garbage collected
+        # in the first place.
+        if maybe_cleanup!(_manager, getid(block)) == false
+            prefetch!(block, _manager.policy, _manager; readonly = isreadonly(A))
+        end
     end
 end
 

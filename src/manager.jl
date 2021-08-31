@@ -236,21 +236,16 @@ function unsafe_cleanup!(M::CacheManager, id = nothing)
 
         # Free all blocks in the cleanlist
         for block in cleanlist
-            @check !isfree(block) || block.evicting
-            # safeprint("""
-            # MANAGER: Freeing block
-            # $block
-            # """)
+            @check !isfree(block)
 
             id == getid(block) && (id_cleaned = true)
             @telemetry M telemetry_gc(gettelemetry(M), getid(block))
-
             sibling = getsibling(block)
             if sibling !== nothing
                 @check getid(sibling) == getid(block)
                 @check getpool(sibling) != getpool(block)
                 @check getsibling(sibling) == block
-                #safeprint("MANAGER: Freeing sibling")
+
                 delete!(M.policy, sibling)
                 unsafe_free_direct(M, sibling)
             end
@@ -358,7 +353,7 @@ function unsafe_setprimary!(
     @check primary == current
 
     # Small change GC ran. Make sure that `current` is still not queued before comitting.
-    isqueued(current) && return nothing
+    isqueued(primary) && return nothing
     old = atomic_ptr_xchg!(backedge, datapointer(next))
     map[id] = (next, backedge)
 

@@ -21,7 +21,9 @@
         # that this object is queued to be freed.
         #
         # As such, it will not even move the array and simple return.
-        CachedArrays.evict!(_a)
+        CachedArrays.@spinlock CachedArrays.alloc_lock(manager) begin
+            CachedArrays.evict!(_a, manager.policy, manager)
+        end
 
         @test length(CachedArrays.visible_ids(manager, Local)) == 0
         @test length(CachedArrays.visible_ids(manager, Remote)) == 0

@@ -112,7 +112,7 @@ end
 function telemetry_gc(telemetry::Telemetry, id)
     now = time_ns()
     @spinlock telemetry.lock begin
-        log = @inbounds(telemetry.logs[id])
+        log = telemetry.logs[id]
         push!(log, TelemetryRecord(now, 0, GarbageCollected))
     end
     return nothing
