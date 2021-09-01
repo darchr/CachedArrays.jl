@@ -154,6 +154,7 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
     if getpool(block) == Local
         return nothing
     end
+
     @check getsibling(block) === nothing
     bytes = length(block)
     if !canalloc(getheap(manager, LocalPool()), bytes)

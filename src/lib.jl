@@ -8,9 +8,9 @@ const FORWARDING_KEYWORDS = [:prefetch!, :softevict!, :evict!, :unsafe_free, :_u
 const KEYWORDS = vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
 
 for keyword in KEYWORDS
-    @eval $keyword(x::AbstractArray) = nothing
-    @eval $keyword(x::CachedArray) = $keyword(Cacheable(), x)
-    @eval $keyword(x, y, z...) = foreach($keyword, (x, y, z...,))
+    @eval $keyword(x::AbstractArray; kw...) = nothing
+    @eval $keyword(x::CachedArray; kw...) = $keyword(Cacheable(), x; kw...)
+    @eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...,))
 end
 
 children(x) = ()
@@ -61,9 +61,9 @@ macro wrapper(typ, fields...)
             end
         elseif in(f, FORWARDING_KEYWORDS)
             # Forwarding methods for policy hints
-            forwards = [:($call(getproperty(x, $field))) for field in fields]
+            forwards = [:($call(getproperty(x, $field); kw...)) for field in fields]
             return quote
-                function $call(x::$typ)
+                function $call(x::$typ; kw...)
                     $(forwards...)
                     return nothing
                 end
