@@ -510,7 +510,8 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Polyester.@batch per = core for i = 1:4096:sizeof(heap)
+    #Polyester.@batch per=core for i in 1:4096:sizeof(heap)
+    Polyester.@batch per=core for i in 1:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
     end
     return nothing

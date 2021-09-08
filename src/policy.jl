@@ -199,11 +199,11 @@ end
 
 # TODO: Time since last GC?
 function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
-    # allocated, total = getstate(getheap(manager, LocalPool()))
-    # if allocated / total >= 0.90
-    #     # Trigger full GC and try to get pending finalizers to run.
-    #     GC.gc(false)
-    # end
+    allocated, total = getstate(getheap(manager, LocalPool()))
+    if allocated / total >= 0.90
+        # Trigger full GC and try to get pending finalizers to run.
+        GC.gc(false)
+    end
 
     # If allocation is successful, good!
     @return_if_exists ptr = unsafe_alloc_direct(LocalPool(), manager, bytes, id)

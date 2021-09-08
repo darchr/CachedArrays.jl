@@ -281,22 +281,17 @@ function atomic_ptr_xchg!(ptr::Ptr{Ptr{T}}, v::Ptr{T}) where {T}
 end
 
 # Convenience Constructors
-struct ToCached{T,M,S}
+struct ToCached{M,S}
     manager::M
     status::S
     priority::CachedArrays.AllocationPriority
 end
 
-function tocached(::Type{T}, m::M, s::S = CachedArrays.NotBusy(); priority = CachedArrays.ForceLocal) where {T,M,S}
-    return ToCached{T,M,S}(m, s, priority)
-end
-
-function (f::ToCached{T})(x...) where {T}
-    return CachedArrays.CachedArray{T}(undef, f.manager, x; f.status, f.priority)
+function tocached(m::M, s::S = CachedArrays.NotBusy(); priority = CachedArrays.ForceLocal) where {M,S}
+    return ToCached{M,S}(m, s, priority)
 end
 
 function (f::ToCached)(::Type{T}, x...) where {T}
     return CachedArrays.CachedArray{T}(undef, f.manager, x; f.status, f.priority)
 end
-
 
