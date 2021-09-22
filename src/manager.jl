@@ -278,7 +278,9 @@ function unsafe_alloc_through_policy(
 )
     # Only attempt draining at the beginning of an allocation round.
     candrain(manager.freebuffer) && unsafe_cleanup!(manager)
-    return policy_new_alloc(manager.policy, manager, bytes, id, priority)
+    ptr = policy_new_alloc(manager.policy, manager, bytes, id, priority)
+    ptr === nothing && error("Allocation failed!")
+    return ptr
 end
 
 # Alloc through the policy
