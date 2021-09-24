@@ -165,7 +165,7 @@ function annotate_impl(fn)
                     tup = ($(args...),)
                     $(Base.invoke)(
                         $(def[:name]),
-                        Tuple{maybesuper.(tup)...},
+                        Tuple{map(maybesuper, tup)...},
                         tup...;
                         $(kwargs...),
                     )

@@ -1,4 +1,5 @@
-# Simple policy that always allocates to the local pool.
+# S
+#imple policy that always allocates to the local pool.
 struct LocalTracker end
 
 # Ignore all hints.
@@ -17,5 +18,5 @@ function policy_new_alloc(::LocalTracker, manager, bytes, id, _::AllocationPrior
         GC.gc(true)
     end
     @return_if_exists unsafe_alloc_direct(LocalPool(), manager, bytes, id)
-    error("Ran out of memory!")
+    return nothing
 end

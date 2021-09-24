@@ -499,7 +499,7 @@ end
 #####
 
 # Touch all the pages in an allocation.
-function materialize_os_pages!(heap::CompactHeap)
+function materialize_os_pages!(heap::CompactHeap; readall = false)
     # First, we must make sure that NOTHING is allocated in the heap - otherwise, we might
     # over write some existing data.
     if length(heap) != 1 || !isfree(first(heap))
@@ -512,6 +512,15 @@ function materialize_os_pages!(heap::CompactHeap)
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
     Polyester.@batch per=core for i in 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
+    end
+
+    # Read all cache lines (cleans cache if running in 2LM) everything
+    if readall
+        v = zeros(UInt8, Threads.nthreads())
+        Polyester.@batch per=core for i in 1:64:sizeof(heap)
+            v[Threads.threadid()] += unsafe_load(ptr, i)
+        end
+        return sum(v)
     end
     return nothing
 end
