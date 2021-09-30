@@ -1,3 +1,6 @@
+# Dispatch Token
+struct Cacheable end
+
 #####
 ##### Metadata
 #####
@@ -47,30 +50,66 @@ isdirty(A) = isdirty(metadata(A))
 id(A) = getid(metadata(A))
 pool(A) = getpool(metadata(A))
 
-function prefetch!(A; kw...)
+function prefetch!(::Cacheable, A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) prefetch!(A, _manager.policy, _manager)
-end
-
-function shallowfetch!(A; kw...)
-    _manager = manager(A)
-    @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-        actuate!(
-            LocalPool(),
-            A,
-            _manager;
-            copydata = false,
-            updatebackedge = true,
-            freeblock = false,
-            kw...,
-        )
+    @spinlock alloc_lock(_manager) begin
+        block = metadata(A)
+        # Possibility that `maybe_cleanup!` cleans up this block.
+        # Presumeably, this can't happen since we have `A` and `A` is holding onto the
+        # object that owns this block ... so it should never have been garbage collected
+        # in the first place.
+        if maybe_cleanup!(_manager, getid(block)) == false
+            prefetch!(block, _manager.policy, _manager; readonly = isreadonly(A))
+        end
     end
 end
 
-function evict!(A; kw...)
+# function shallowfetch!(::Cacheable, A; kw...)
+#     _manager = manager(A)
+#     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
+#         actuate!(
+#             LocalPool(),
+#             A,
+#             _manager;
+#             copydata = false,
+#             updatebackedge = true,
+#             freeblock = false,
+#             kw...,
+#         )
+#     end
+# end
+
+function evict!(::Cacheable, A; kw...)
     _manager = manager(A)
-    @spinlock alloc_lock(_manager) evict!(A, _manager.policy, _manager)
+    @spinlock alloc_lock(_manager) begin
+        maybe_cleanup!(_manager)
+        evict!(A, _manager.policy, _manager)
+    end
+    return nothing
 end
 
+function softevict!(::Cacheable, A)
+    _manager = manager(A)
+    @spinlock alloc_lock(_manager) softevict!(_manager.policy, _manager, metadata(A))
+end
+
+# function _unsafe_track!(manager)
+#     token = @spinlock alloc_lock(manager) begin
+#         _unsafe_track!(manager.policy)
+#     end
+#     return token
+# end
+#
+# function _unsafe_untrack!(manager, token, return_value)
+#     # Optimization - check before acquiring the lock
+#     token == false && return nothing
+#     @spinlock alloc_lock(manager) begin
+#         _unsafe_untrack!(manager, manager.policy, token, return_value)
+#     end
+#     return nothing
+# end
+
+# TODO: This is such a hack ...
+unsafe_free(::Cacheable, A) = unsafe_free(A.region)
 manager(x) = error("Implement `manager` for $(typeof(x))")
 

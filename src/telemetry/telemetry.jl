@@ -1,3 +1,9 @@
+# TODO: Finalize API...
+function telemetry_alloc end
+function telemetry_gc end
+function telemetry_change end
+function telemetry_move end
+
 #####
 ##### Telemetry
 #####
@@ -106,7 +112,7 @@ end
 function telemetry_gc(telemetry::Telemetry, id)
     now = time_ns()
     @spinlock telemetry.lock begin
-        log = @inbounds(telemetry.logs[id])
+        log = telemetry.logs[id]
         push!(log, TelemetryRecord(now, 0, GarbageCollected))
     end
     return nothing
@@ -178,6 +184,27 @@ function stacktraces_for(telemetry::Telemetry, keys)
     return stacktrace.(Ref(telemetry), keys)
 end
 
+function estimate_lifetime(library::Vector{TelemetryRecord})
+    # If this hasn't been GC'd yet, than return 0 as a sentinel value.
+    last(library).action != GarbageCollected && return 0
+
+    # Otherwise, the lifetime will be the difference between the first and last access
+    # times. We need to be a bit careful if there wasn't a state transition for some
+    # reason. In this case, the length of the record should be 2.
+    #
+    # The best we can do is say that the object was alive from when it was allocated
+    # to when it was garbage collected.
+    if length(library) == 2
+        return last(library).accesstime - first(library).accesstime
+    else
+        return library[end-1].accesstime - first(library).accesstime
+    end
+end
+
+#####
+##### Save Telemetry
+#####
+
 const GLOBAL_FILES = [
     "./boot.jl",
     "./client.jl",
@@ -204,26 +231,6 @@ function prettify(stack::Vector{Base.StackTraces.StackFrame})
     return stack
 end
 
-function estimate_lifetime(library::Vector{TelemetryRecord})
-    # If this hasn't been GC'd yet, than return 0 as a sentinel value.
-    last(library).action != GarbageCollected && return 0
-
-    # Otherwise, the lifetime will be the difference between the first and last access
-    # times. We need to be a bit careful if there wasn't a state transition for some
-    # reason. In this case, the length of the record should be 2.
-    #
-    # The best we can do is say that the object was alive from when it was allocated
-    # to when it was garbage collected.
-    if length(library) == 2
-        return last(library).accesstime - first(library).accesstime
-    else
-        return library[end-1].accesstime - first(library).accesstime
-    end
-end
-
-#####
-##### Save Telemetry
-#####
 
 # Custom JSON serialization for Telemetry
 struct TelemetrySerialization <: JSON.CommonSerialization end
@@ -273,7 +280,10 @@ end
 function tostring(::Type{NamedTuple{names,T}}) where {names,T}
     return "NamedTuple{$names, $(tostring(T))}"
 end
+
+tostring(x::Core.TypeofBottom) = "Union{}"
 tostring(::Type{<:CachedArray{T,N}}) where {T,N} = "CachedArray{$T,$N}"
+tostring(::Type{<:CacheManager}) = "CacheManager"
 
 # Top level save functions
 function JSON.show_json(io::SC, ::TelemetrySerialization, x::Core.MethodInstance)

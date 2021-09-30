@@ -2,11 +2,19 @@
 ##### Wrapper Types
 #####
 
-const STATE_CHANGES = [
-    :readable,
-    :writable,
-    :release
-]
+const RECONSTRUCTING_KEYWORDS = [:readable, :writable, :release]
+const FORWARDING_KEYWORDS = [:prefetch!, :softevict!, :evict!, :unsafe_free, :_unsafe_track!, :_unsafe_untrack!]
+
+const KEYWORDS = vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
+
+for keyword in KEYWORDS
+    @eval $keyword(x::AbstractArray; kw...) = nothing
+    @eval $keyword(x::CachedArray; kw...) = $keyword(Cacheable(), x; kw...)
+    @eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...,))
+end
+
+children(x) = ()
+children(x::Union{Tuple,AbstractArray}) = x
 
 # Helper functions for when we need to recurse using "Base.invoke"
 maybesuper(::CachedArray{T,N}) where {T,N} = DenseArray{T,N}
@@ -17,6 +25,8 @@ maybesuper(::T) where {T} = T
 _maybesuper(x::T) where {T} = T
 _maybesuper(x::T, ::Any, y...) where {T} = _maybesuper(x, y...)
 _maybesuper(x::T, ::CachedArray, y...) where {T} = supertype(T)
+
+makecall(f::Symbol) = esc(:(CachedArrays.$f))
 
 # TODO: Make no-op in case of no required state change.
 macro wrapper(typ, fields...)
@@ -31,21 +41,35 @@ macro wrapper(typ, fields...)
         end
 
         fns = expr.args
-        @assert all(in(STATE_CHANGES), fns)
+        @assert all(in(KEYWORDS), fns)
     else
-        fns = STATE_CHANGES
+        fns = KEYWORDS
     end
 
     # Construct a builder for our generated expressions.
-    fns = [esc(:(CachedArrays.$f)) for f in fns]
     fields = map(QuoteNode, fields)
     function builder(f)
-        accessors = [:($f(getproperty(x, $field))) for field in fields]
-        nt = :(NamedTuple{($(fields...),)}(($(accessors...),)))
-        return quote
-            function $f(x::$typ)
-                return ConstructionBase.setproperties(x, $nt)
+        call = makecall(f)
+        if in(f, RECONSTRUCTING_KEYWORDS)
+            # Reconstruction for State Changes
+            accessors = [:($call(getproperty(x, $field))) for field in fields]
+            nt = :(NamedTuple{($(fields...),)}(($(accessors...),)))
+            return quote
+                function $call(x::$typ)
+                    return ConstructionBase.setproperties(x, $nt)
+                end
             end
+        elseif in(f, FORWARDING_KEYWORDS)
+            # Forwarding methods for policy hints
+            forwards = [:($call(getproperty(x, $field); kw...)) for field in fields]
+            return quote
+                function $call(x::$typ; kw...)
+                    $(forwards...)
+                    return nothing
+                end
+            end
+        else
+            error("Unknown Keyword: $f")
         end
     end
 
@@ -53,19 +77,27 @@ macro wrapper(typ, fields...)
 
     # Define "maybesuper" for this type as well.
     accessors = [:(getproperty(x, $field)) for field in fields]
-    _f = esc(:(CachedArrays.maybesuper))
+    _f = makecall(:maybesuper)
     maybesuper = quote
         $_f(x::$typ) = _maybesuper(x, $(accessors...))
+    end
+
+    # Define accessor method for children array fields
+    _f = makecall(:children)
+    children = quote
+        $_f(x::$typ) = ($(accessors...),)
     end
 
     return quote
         $(overloads...)
         $maybesuper
+        $children
         # $_expand
     end
 end
 
 @wrapper LinearAlgebra.Transpose parent
+@wrapper Base.SubArray parent
 @wrapper Base.ReshapedArray parent
 
 #####
@@ -77,22 +109,14 @@ macro annotate(fn)
     return annotate_impl(fn)
 end
 
-const CACHEDARRAY_KEYWORDS = [
-    "prefetch!",
-    "evict!",
-    "readable",
-    "writable",
-    "release",
-]
-
 function maybe_process_call(sym::Symbol)
     symstring = String(sym)
     # Our special keywords begin with
     if startswith(symstring, "__") && endswith(symstring, "__")
         # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
-        substr = symstring[3:end-2]
-        if in(substr, CACHEDARRAY_KEYWORDS)
-            return :($(Symbol(substr)))
+        substr = Symbol(symstring[3:end-2])
+        if in(substr, KEYWORDS)
+            return substr
         end
     end
     return sym
@@ -141,7 +165,7 @@ function annotate_impl(fn)
                     tup = ($(args...),)
                     $(Base.invoke)(
                         $(def[:name]),
-                        Tuple{maybesuper.(tup)...},
+                        Tuple{map(maybesuper, tup)...},
                         tup...;
                         $(kwargs...),
                     )
@@ -194,4 +218,20 @@ function prepare_function(expr::Expr)
 
     return def, oldargs
 end
+
+# #####
+# ##### For analyzing arbitrary structs.
+# #####
+#
+# onblocks(f::F, x::AbstractArray{<:AbstractArray}) where {F} = foreach(x -> onblocks(f, x), x)
+# onblocks(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onblocks(f, x), x)
+# onblocks(f::F, x::CachedArray) where {F} = f(metadata(x))
+#
+# @generated function onblocks(f::F, x::T) where {F,T}
+#     iszero(fieldcount(T)) && return :(nothing)
+#     exprs = [:(onblocks(f, (x.$fieldname))) for fieldname in fieldnames(T)]
+#     return quote
+#         $(exprs...)
+#     end
+# end
 

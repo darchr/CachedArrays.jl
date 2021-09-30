@@ -28,6 +28,26 @@ end
 free(::MmapAllocator, ptr::Ptr) = delete!(MMAP_ALLOCATED_ARRAYS, ptr)
 
 #####
+##### Persistent Mmap Allocator
+#####
+
+struct PersistentMmapAllocator <: AbstractAllocator
+    path::String
+end
+
+function allocate(allocator::PersistentMmapAllocator, sz)
+    path = allocator.path
+    A = open(path; create = true, read = true, write = true) do io
+        Mmap.mmap(io, Vector{UInt8}, sz)
+    end
+    ptr = Ptr{Nothing}(pointer(A))
+    MMAP_ALLOCATED_ARRAYS[ptr] = A
+    return ptr
+end
+
+free(::PersistentMmapAllocator, ptr::Ptr) = delete!(MMAP_ALLOCATED_ARRAYS, ptr)
+
+#####
 ##### DRAM Allocator
 #####
 

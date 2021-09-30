@@ -22,19 +22,19 @@ const Writable = ReadWrite
 ######
 
 struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
-    region::Region{M}
+    object::Object{M}
     dims::NTuple{N,Int}
 
     # Inner constructor - do a type check and make sure the finalizer is attached.
     function CachedArray{T,N}(
-        region::Region{M},
+        object::Object{M},
         dims::NTuple{N,Int},
         status::S = NotBusy(),
     ) where {T,N,S,M}
         if !isbitstype(T)
             throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
         end
-        return new{T,N,S,M}(region, dims)
+        return new{T,N,S,M}(object, dims)
     end
 end
 
@@ -45,15 +45,18 @@ const WritableCachedArray{T,N} = CachedArray{T,N,<:Writable,<:Any}
 const UnwritableCachedArray{T,N} = CachedArray{T,N,<:Union{NotBusy,ReadOnly},<:Any}
 const BusyCachedArray{T,N} = CachedArray{T,N,<:Union{ReadOnly,ReadWrite},<:Any}
 
+isreadonly(::CachedArray) = false
+isreadonly(::UnwritableCachedArray) = true
+
 # Cached API
-region(A::CachedArray) = A.region
+object(A::CachedArray) = A.object
 metastyle(::CachedArray) = BlockMeta()
-datapointer(A::CachedArray) = datapointer(region(A))
-manager(A::CachedArray) = manager(region(A))
+datapointer(A::CachedArray) = datapointer(object(A))
+manager(A::CachedArray) = manager(object(A))
 
 # Escape hatch to ALWAYS get a pointer, regardless of the status of the array.
 # Should only be called directly by `Base.pointer` or by the `CacheManager`.
-@inline unsafe_pointer(A::CachedArray{T}) where {T} = Ptr{T}(pointer(region(A)))
+@inline unsafe_pointer(A::CachedArray{T}) where {T} = Ptr{T}(pointer(object(A)))
 
 # Don't let functions normally take pointers to un-acquired CachedArrays.
 Base.pointer(A::CachedArray) = unsafe_pointer(A)
@@ -69,9 +72,9 @@ function CachedArray{T,N}(
     status = NotBusy(),
     priority = PreferLocal,
 ) where {T,N}
-    region = alloc(manager, sizeof(x))
-    unsafe_copyto!(Ptr{T}(pointer(region)), pointer(x), length(x))
-    return CachedArray{T,N}(region, size(x), status)
+    object = alloc(manager, sizeof(x))
+    unsafe_copyto!(Ptr{T}(pointer(object)), pointer(x), length(x))
+    return CachedArray{T,N}(object, size(x), status)
 end
 
 function CachedArray{T}(::UndefInitializer, manager, i::Integer...; kw...) where {T}
@@ -85,8 +88,8 @@ function CachedArray{T}(
     status = NotBusy(),
     priority = PreferLocal,
 ) where {T,N}
-    region = alloc(manager, prod(dims) * sizeof(T), priority)
-    return CachedArray{T,N}(region, dims, status)
+    object = alloc(manager, prod(dims) * sizeof(T), priority)
+    return CachedArray{T,N}(object, dims, status)
 end
 
 #####
@@ -118,9 +121,9 @@ function Base.similar(
     eltyp::Type{T} = eltype(A),
     dims::Tuple{Vararg{Int,N}} = size(A);
     status = ReadWrite(),
-    priority = PreferLocal,
+    priority = ForceLocal,
 ) where {T,N}
-    CachedArray{T}(undef, manager(A), dims; status = status, priority = priority)
+    return CachedArray{T}(undef, manager(A), dims; status = status, priority = priority)
 end
 
 function Base.iterate(A::ReadableCachedArray, i::Int = 1)
@@ -144,8 +147,8 @@ function Base.reshape(x::CachedArray{T,M,S}, dims::NTuple{N,Int}) where {T,N,M,S
         return x
     end
 
-    # Keep the same underlying region.
-    return CachedArray{T,N}(region(x), dims, S())
+    # Keep the same underlying object.
+    return CachedArray{T,N}(object(x), dims, S())
 end
 
 #####
@@ -231,11 +234,11 @@ const __updates = Dict(
 
 for (typ, fn) in __fnmap
     # No-op if already correct type.
-    @eval function $fn(x::CachedArray{T,N,$typ}) where {T,N}
+    @eval function $fn(::Cacheable, x::CachedArray{T,N,$typ}) where {T,N}
         return x
     end
 
-    @eval function $fn(x::CachedArray{T,N,S}) where {T,N,S}
+    @eval function $fn(::Cacheable, x::CachedArray{T,N,S}) where {T,N,S}
         # Optional Telemetry
         @telemetry manager(x) begin
             telemetry_change(
@@ -247,7 +250,7 @@ for (typ, fn) in __fnmap
         end
         # unpack any potential policy updates.
         $(__updates...)
-        return CachedArray{T,N}(region(x), size(x), $typ())
+        return CachedArray{T,N}(object(x), size(x), $typ())
     end
 
     # Define `Base.convert` in terms of the "release, readable, writable" methods

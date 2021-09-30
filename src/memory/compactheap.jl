@@ -9,14 +9,6 @@ poweroftwo(x::Integer) = PowerOfTwo(x)
 getbin(x::PowerOfTwo, sz) = ((sz - 1) >> x.val) + 1
 binsize(x::PowerOfTwo, bin) = bin << x.val
 
-macro checknothing(expr, action = :(return nothing))
-    return quote
-        x = $(esc(expr))
-        x === nothing && $(esc(action))
-        x
-    end
-end
-
 #####
 ##### CompactHeap
 #####
@@ -28,6 +20,7 @@ mutable struct CompactHeap{T} <: AbstractHeap
     # Where is and what kind of memory do we have?
     base::Ptr{Nothing}
     len::Int
+    allocated::Int
     pool::Pool
 
     # Maintaining freelist status
@@ -38,6 +31,7 @@ end
 
 topointer(ptr::Ptr) = ptr
 topointer(A::AbstractArray) = convert(Ptr{Nothing}, pointer(A))
+getstate(heap::CompactHeap) = (heap.allocated, heap.len)
 
 function CompactHeap(
     allocator::T,
@@ -53,12 +47,23 @@ function CompactHeap(
 
     # Allocate the memory managed by this heap
     base = allocate(allocator, sz)
+    allocated = 0
 
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
     freelists = [Freelist{Block}() for _ = 1:numbins]
 
-    heap = CompactHeap{T}(allocator, minallocation, base, sz, pool, status, freelists, true)
+    heap = CompactHeap{T}(
+        allocator,
+        minallocation,
+        base,
+        sz,
+        allocated,
+        pool,
+        status,
+        freelists,
+        true,
+    )
 
     finalizer(heap) do x
         free(x.allocator, x.base)
@@ -207,11 +212,12 @@ function putback!(heap::CompactHeap, block::Block)
     previous = walkprevious(heap, block)
     next = walknext(heap, block)
 
-    # If the block before this one is being evicted, we don't want to merge since that
-    # will break upstream logic.
     if previous !== nothing && isfree(previous)
         remove!(heap, previous)
         previous.size += block.size
+
+        # Purge metadata for this block to try and catch errors earlier.
+        zerometa!(block)
         block = previous
     end
 
@@ -227,6 +233,9 @@ function putback!(heap::CompactHeap, block::Block)
             if nextnext !== nothing
                 nextnext.backsize = block.size
             end
+
+            # Purge metadata for the next block to try and catch errors earlier.
+            zerometa!(next)
         else
             next.backsize = block.size
         end
@@ -256,10 +265,14 @@ function alloc(heap::CompactHeap, bytes::Integer, id::UInt)
     block === nothing && return nothing
 
     # Setup the default state for the block
+    heap.allocated += sizeof(block)
     clearbits!(block)
     block.id = id
     block.pool = heap.pool
 
+    # Preemptively mark as dirty.
+    # Up to callee's to determine if this is actually clean or not.
+    block.dirty = true
     ptr = pointer(block) + headersize()
     return ptr
 end
@@ -280,6 +293,7 @@ function free(heap::CompactHeap, ptr::Ptr{Nothing})
         return nothing
     end
     block.free = true
+    heap.allocated -= sizeof(block)
     putback!(heap, block)
     return nothing
 end
@@ -308,13 +322,18 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # By the invariants we keep on the heap, the next block should be not-free.
         # However, it MIGHT be queued for deletion, in which case, we can't move it.
         if block.queued
-            @checknothing freeblock = nextfree(heap, block) break
-            @checknothing block = walknext(heap, freeblock) break
+            @checknothing freeblock = nextfree(heap, block)
+            @checknothing block = walknext(heap, freeblock)
             continue
         end
 
+        # The following operations need to be atomic as far as the GC is concerned.
+        # This takes care of if the GC runs while we're moving data and the block we
+        # are moving suddenly becomes free ...
+
         # Now, we need to move "block" to "freeblock" and then fixup the heap.
         id = block.id
+        safeprint("Defrag: Moving $id")
         pool = block.pool
         block.backsize = freeblock.backsize
         freeblock_size = freeblock.size
@@ -323,13 +342,13 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # After the "memcpy", the new location for "block" is "freeblock".
         # Thus, we need to perform the callback so that references can be updated.
         aliases = pointer(freeblock) + sizeof(block) > pointer(block)
+        f(id, freeblock, block)
         if aliases
             _memcpy!(pointer(freeblock), pointer(block), sizeof(block); nthreads = nothing)
         else
             _memcpy!(pointer(freeblock), pointer(block), sizeof(block); nthreads)
         end
 
-        f(id, freeblock, block)
         @check freeblock.id == id
 
         # Update siblings
@@ -352,7 +371,7 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # thing for now.
         putback!(heap, freeblock)
 
-        @checknothing block = walknext(heap, freeblock) break
+        @checknothing block = walknext(heap, freeblock)
         block.backsize = freeblock.size
     end
     return nothing
@@ -362,7 +381,7 @@ end
 ##### Eviction API
 #####
 
-function unsafe_free!(f, block::Block)
+function unsafe_free!(f::F, block::Block) where {F}
     @check !isfree(block)
 
     # Mark this block as being evicted.
@@ -374,10 +393,11 @@ function unsafe_free!(f, block::Block)
     return f(block)
 end
 
-function evict!(f::F, heap, block) where {F}
+function evict!(f::F, heap::CompactHeap, block::Block) where {F}
     if isfree(block)
         remove!(heap, block)
         block.free = false
+        heap.allocated += sizeof(block)
         return nothing
     else
         return unsafe_free!(f, block)
@@ -392,6 +412,7 @@ end
 function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     heap.canalloc = false
     sizefreed = 0
+
     last = block
     current = block
 
@@ -466,6 +487,8 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
     block.free = true
     block.orphaned = false
     block.size = sizefreed
+    heap.allocated -= sizefreed
+
     putback!(heap, block)
     heap.canalloc = true
     return nothing
@@ -476,7 +499,7 @@ end
 #####
 
 # Touch all the pages in an allocation.
-function materialize_os_pages!(heap::CompactHeap)
+function materialize_os_pages!(heap::CompactHeap; readall = false)
     # First, we must make sure that NOTHING is allocated in the heap - otherwise, we might
     # over write some existing data.
     if length(heap) != 1 || !isfree(first(heap))
@@ -487,8 +510,17 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Threads.@threads for i = 1:4096:sizeof(heap)
+    Polyester.@batch per=core for i in 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
+    end
+
+    # Read all cache lines (cleans cache if running in 2LM) everything
+    if readall
+        v = zeros(UInt8, Threads.nthreads())
+        Polyester.@batch per=core for i in 1:64:sizeof(heap)
+            v[Threads.threadid()] += unsafe_load(ptr, i)
+        end
+        return sum(v)
     end
     return nothing
 end

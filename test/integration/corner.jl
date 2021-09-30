@@ -1,4 +1,5 @@
 @testset "Testing Corner Cases" begin
+    Local, Remote = CachedArrays.Local, CachedArrays.Remote
     manager = CachedArrays.CacheManager(
         CachedArrays.AlignedAllocator(),
         CachedArrays.AlignedAllocator();
@@ -14,19 +15,18 @@
         # Run finalizers on the `Region` backing `_a`.
         # This will put it on the manager's freebuffer.
         # Don't use `_a` after this operation.
-        finalize(_a.region)
+        finalize(_a.object)
 
         # When we manually invoke an eviction, the manager will discover during allocation
         # that this object is queued to be freed.
         #
         # As such, it will not even move the array and simple return.
-        CachedArrays.evict!(_a)
+        CachedArrays.@spinlock CachedArrays.alloc_lock(manager) begin
+            CachedArrays.evict!(_a, manager.policy, manager)
+        end
 
-        @test length(manager.localmap) == 0
-        @test CachedArrays.getsize(manager.localmap) == 0
-
-        @test length(manager.remotemap) == 0
-        @test CachedArrays.getsize(manager.remotemap) == 0
+        @test length(CachedArrays.visible_ids(manager, Local)) == 0
+        @test length(CachedArrays.visible_ids(manager, Remote)) == 0
 
         @test CachedArrays.check(manager.remote_heap)
         @test CachedArrays.check(manager.local_heap)
@@ -48,7 +48,7 @@
         # Run finalizers on the `Region` backing `_a`.
         # This will put it on the manager's freebuffer.
         # Don't use `_a` after this operation.
-        finalize(_a.region)
+        finalize(_a.object)
 
         # When we manually invoke an eviction, the manager will discover during allocation
         # that this object is queued to be freed.
@@ -56,11 +56,8 @@
         # As such, it will not even move the array and simple return.
         CachedArrays.prefetch!(_a)
 
-        @test length(manager.localmap) == 0
-        @test CachedArrays.getsize(manager.localmap) == 0
-
-        @test length(manager.remotemap) == 0
-        @test CachedArrays.getsize(manager.remotemap) == 0
+        @test length(CachedArrays.visible_ids(manager, Local)) == 0
+        @test length(CachedArrays.visible_ids(manager, Remote)) == 0
 
         @test CachedArrays.check(manager.remote_heap)
         @test CachedArrays.check(manager.local_heap)

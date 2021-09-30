@@ -13,15 +13,12 @@ end
 # This is a little brittle and requires a bit of care for the following reasons:
 #
 # 1. Gensyms need to be replaced in a deterministic manner. See `alias_gensyms` below.
-# 2. Source lines need to be stripped. Much of this is taken care of `myprettify`.
-#    Note that `myprettify` is taken from the `MacroTools` master. Once a new release of
-#    MacroTools is released that addes the `alias = false` keyword, this can be removed.
-# 3. We need to replace instances of `CachedArrays.symbol` in the expected expression with
+# 2. We need to replace instances of `CachedArrays.symbol` in the expected expression with
 #    a `GlobalRef` in order to match the results from `macroexpand`. This is handled by
 #    the `globalref` function below.
 macro annotatetest(expr)
     return :(
-        myprettify(
+        MacroTools.prettify(
             macroexpand(TestModule, $(QuoteNode(expr)), recursive = true),
             alias = false,
         ) |> alias_gensyms
@@ -29,7 +26,9 @@ macro annotatetest(expr)
 end
 
 macro expected(expr)
-    return :(alias_gensyms(globalref(myprettify($(QuoteNode(expr)), alias = false))))
+    return quote
+        alias_gensyms(globalref(MacroTools.prettify($(QuoteNode(expr)), alias = false)))
+    end
 end
 
 # Replace instances of "CachedArrays.x" with a GlobalRef to match the result of
@@ -57,16 +56,6 @@ function alias_gensyms(expr)
     end
 end
 
-# Hack until MacroTools gets a new release.
-function myprettify(ex; lines = false, alias = true)
-    return ex |>
-           (lines ? identity : MacroTools.striplines) |>
-           MacroTools.flatten |>
-           MacroTools.unresolve |>
-           MacroTools.resyntax |>
-           (alias ? MacroTools.alias_gensyms : identity)
-end
-
 @testset "Testing Library Utilities" begin
     @testset "Testing @wrapper" begin
         manager = CachedArrays.CacheManager(
@@ -74,7 +63,7 @@ end
             CachedArrays.AlignedAllocator();
             localsize = 1_000_000_000,
             remotesize = 1_000_000_000,
-            minallocation = 12
+            minallocation = 12,
         )
 
         x = CachedArray{Float32}(undef, manager, 10, 20)
@@ -149,7 +138,7 @@ end
 
     @testset "Testing @annotate" begin
         # Test "maybe_process_call" works on keywords and ignores nonkeywords.
-        for keyword in CachedArrays.CACHEDARRAY_KEYWORDS
+        for keyword in CachedArrays.KEYWORDS
             sym = Symbol("__$(keyword)__")
             @test CachedArrays.maybe_process_call(sym) == Symbol(keyword)
         end
@@ -190,8 +179,8 @@ end
         ##### Test Cases
         #####
 
-        # Detect if MacroTools gets updated and add the `alias` keyword.
-        @test_throws MethodError MacroTools.prettify(:(myexpr); alias = false)
+        # # Detect if MacroTools gets updated and add the `alias` keyword.
+        # @test_throws MethodError MacroTools.prettify(:(myexpr); alias = false)
 
         ### Test 1
         fn = @annotatetest CachedArrays.@annotate function Mod.fn(

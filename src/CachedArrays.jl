@@ -2,7 +2,7 @@ module CachedArrays
 
 export CachedArray,
     ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
-export @annotate
+export @annotate, tocached
 
 # base
 import Base: @lock
@@ -96,6 +96,7 @@ alwaysfalse(x...; kw...) = false
 include("utils/utils.jl")
 include("utils/findnexttree.jl")
 include("utils/freebuffer.jl")
+include("utils/lru.jl")
 
 include("api.jl")
 include("allocators.jl")
@@ -104,19 +105,18 @@ include("allocators.jl")
 include("memory/memory.jl")
 
 # Cache eviction policies
-include("policy/policy.jl")
+include("policy.jl")
+include("policies/local.jl")
 
 # Implementation of the arrays and cache manager
-include("managers/heapmanager.jl")
-include("managers/cachemanager.jl")
-include("managers/validation.jl")
+include("manager.jl")
+include("validation.jl")
 
 # Array Implementstions
 include("llvm.jl")
 using .LoadStore: LoadStore
 
-include("arrays/cachedarray.jl")
-include("arrays/heaparray.jl")
+include("array.jl")
 include("telemetry/telemetry.jl")
 
 # Fast "memcpy"
@@ -150,7 +150,7 @@ function gc_managers()
     i === nothing && return 0
 
     # Remove the managers from this list and then run a full garbage collection to make sure
-    # they're well can completely gone.
+    # they're well and completely gone.
     deleteat!(GlobalManagers, i)
     GC.gc(true)
 
