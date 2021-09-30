@@ -73,8 +73,8 @@ function numa_alloc(sz::Integer; alignment = UInt(64), nodeid::Integer = 0)
         sz += alignment - obytes
     end
 
-    ptr = Ptr{Nothing}()
-    ret = ccall(
+    ptr_ref   = Ref(Ptr{Nothing}())
+    ptr_ref[] = ccall(
         (
             :numa_alloc_onnode,
             dlpath("libnuma")
@@ -84,15 +84,14 @@ function numa_alloc(sz::Integer; alignment = UInt(64), nodeid::Integer = 0)
         sz,
         nodeid
     )
-    @assert ret == 0
+    @assert ptr_ref[] != C_NULL
 
-    ptr = ret
-    push!(NUMA_ALLOCATED_SIZES, ptr => sz)
-    return ptr
+    push!(NUMA_ALLOCATED_SIZES, ptr_ref[] => sz)
+    return ptr_ref[]
 end
 
 function numa_free(ptr::Ptr{Nothing}, sz::Integer)
-    pop!(NUMA_ALLOCATED_SIZES, ptr)
+    delete!(NUMA_ALLOCATED_SIZES, ptr)
     ccall(
         (
             :numa_free,
