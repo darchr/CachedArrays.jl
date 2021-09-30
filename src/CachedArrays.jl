@@ -26,6 +26,9 @@ import TimerOutputs
 # DocString Helper
 using DocStringExtensions
 
+# dlpath
+using Base.Libc.Libdl
+
 # Import "constructorof" to allow external modules to extend "constructorof" without
 # directly invoking "ConstructablesBase'.
 # Of course, that's what's ultimately happening, but this is just cleaner.
