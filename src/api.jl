@@ -110,6 +110,6 @@ end
 # end
 
 # TODO: This is such a hack ...
-unsafe_free(::Cacheable, A) = unsafe_free(A.region)
+unsafe_free(::Cacheable, A) = unsafe_free(A.object)
 manager(x) = error("Implement `manager` for $(typeof(x))")
 

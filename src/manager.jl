@@ -318,14 +318,13 @@ end
     # TODO: What if this is called while movement is happening ...
     function unsafe_free(object::Object)
         ptr = unsafe_pointer(object)
-
         ptrptr = Ptr{Ptr{Nothing}}(blockpointer(object))
         old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
         isnull(old) || free(manager(object), ptr)
     end
 else
     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
-    unsafe_free(object::Object) = nothing
+    unsafe_free(::Object) = nothing
 end
 
 #####
