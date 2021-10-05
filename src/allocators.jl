@@ -83,7 +83,7 @@ struct NUMAAllocator <: AbstractAllocator
 end
 
 allocate(a::NUMAAllocator, sz) = numa_alloc(sz; nodeid = a.nodeid)
-free(::NUMAAllocator, ptr::Ptr{Nothing}, sz::Integer) = numa_free(ptr, sz)
+free(::NUMAAllocator, ptr::Ptr{Nothing}) = numa_free(ptr)
 
 # Allocates whole pages (4096 bytes <= DEPENDANT ON PAGE SIZE).
 # NOTE: Apparently much slower than malloc. Faster alternatives did not
@@ -91,10 +91,10 @@ free(::NUMAAllocator, ptr::Ptr{Nothing}, sz::Integer) = numa_free(ptr, sz)
 function numa_alloc(sz::Integer; alignment = UInt(64), nodeid::Integer = 0)
     # Need to round up size of allocation for alignment purposes
     # Actually, might need to round up for page size???
-    obytes = sz % PAGE_SIZE[]
-    if obytes > 0
-        sz += PAGE_SIZE[] - obytes
-    end
+    #obytes = sz % PAGE_SIZE[]
+    #if obytes > 0
+    #    sz += PAGE_SIZE[] - obytes
+    #end
 
     ptr_ref   = Ref(Ptr{Nothing}())
     ptr_ref[] = ccall(
@@ -113,7 +113,8 @@ function numa_alloc(sz::Integer; alignment = UInt(64), nodeid::Integer = 0)
     return ptr_ref[]
 end
 
-function numa_free(ptr::Ptr{Nothing}, sz::Integer)
+function numa_free(ptr::Ptr{Nothing})
+    sz = NUMA_ALLOCATED_SIZES[][ptr]
     delete!(NUMA_ALLOCATED_SIZES[], ptr)
     ccall(
         (
