@@ -107,7 +107,6 @@ function CacheManager(
     remote_allocator;
     localsize = mb(1_000),
     remotesize = mb(1_000),
-    gc_when_over = 0.95,
     minallocation = 10,
     policy = OptaneTracker((2^minallocation,)),
     telemetry = NoTelemetry(),

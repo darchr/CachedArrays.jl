@@ -51,7 +51,7 @@ function CompactHeap(
 
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
-    freelists = [Freelist{Block}() for _ = 1:numbins]
+    freelists = [Freelist{Block}() for _ = Base.OneTo(numbins)]
 
     heap = CompactHeap{T}(
         allocator,
