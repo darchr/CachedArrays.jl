@@ -111,7 +111,7 @@ end
 
 function maybe_process_call(sym::Symbol)
     symstring = String(sym)
-    # Our special keywords begin with
+    # Our special keywords begin and end with "__"
     if startswith(symstring, "__") && endswith(symstring, "__")
         # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
         substr = Symbol(symstring[3:end-2])
