@@ -120,11 +120,11 @@ function policy_new_alloc(
 
     # Fallback path - allocate remotely.
     # If we're getting close to filling up the remote pool, do an emergency full GC.
-    allocated, total = getstate(getheap(manager, RemotePool()))
-    if allocated / total >= 0.80
-        # Trigger full GC and try to get pending finalizers to run.
-        GC.gc(true)
-    end
+    # allocated, total = getstate(getheap(manager, RemotePool()))
+    # if allocated / total >= 0.80
+    #     # Trigger full GC and try to get pending finalizers to run.
+    #     GC.gc(true)
+    # end
 
     @return_if_exists ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
     @show manager
@@ -151,6 +151,8 @@ end
 
 function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = false)
     policy.movement_enabled || return nothing
+    block.size > sizeof(getheap(manager, LocalPool())) && return nothing
+
     if getpool(block) == Local
         return nothing
     end
@@ -166,8 +168,9 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
     end
     # Allocate and move.
     # Don't free the old block since we're functioning as a cache.
-    newblock =
-        unsafe_block(unsafe_alloc_direct(LocalPool(), manager, length(block), getid(block)))
+    ptr = unsafe_alloc_direct(LocalPool(), manager, length(block), getid(block))
+    ptr === nothing && return nothing
+    newblock = unsafe_block(ptr)
     copyto!(newblock, block, manager)
     result = unsafe_setprimary!(manager, block, newblock)
     if result === nothing

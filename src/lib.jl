@@ -3,14 +3,17 @@
 #####
 
 const RECONSTRUCTING_KEYWORDS = [:readable, :writable, :release]
-const FORWARDING_KEYWORDS = [:prefetch!, :softevict!, :evict!, :unsafe_free, :_unsafe_track!, :_unsafe_untrack!]
+const FORWARDING_KEYWORDS =
+    [:prefetch!, :softevict!, :evict!, :unsafe_free, :_unsafe_track!, :_unsafe_untrack!]
+const SINGLE_FORWARDING_KEYWORDS = [:manager]
 
-const KEYWORDS = vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
+const KEYWORDS =
+    vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS, SINGLE_FORWARDING_KEYWORDS)
 
-for keyword in KEYWORDS
+for keyword in vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
     @eval $keyword(x::AbstractArray; kw...) = nothing
     @eval $keyword(x::CachedArray; kw...) = $keyword(Cacheable(), x; kw...)
-    @eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...,))
+    @eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...))
 end
 
 children(x) = ()
@@ -68,6 +71,13 @@ macro wrapper(typ, fields...)
                     return nothing
                 end
             end
+        elseif in(f, SINGLE_FORWARDING_KEYWORDS)
+            forward = :($call(getproperty(x, $(first(fields)))))
+            return quote
+                function $call(x::$typ; kw...)
+                    return $forward
+                end
+            end
         else
             error("Unknown Keyword: $f")
         end
@@ -114,7 +124,7 @@ function maybe_process_call(sym::Symbol)
     # Our special keywords begin and end with "__"
     if startswith(symstring, "__") && endswith(symstring, "__")
         # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
-        substr = Symbol(symstring[3:end-2])
+        substr = Symbol(symstring[3:(end - 2)])
         if in(substr, KEYWORDS)
             return substr
         end
@@ -219,19 +229,105 @@ function prepare_function(expr::Expr)
     return def, oldargs
 end
 
-# #####
-# ##### For analyzing arbitrary structs.
-# #####
-#
-# onblocks(f::F, x::AbstractArray{<:AbstractArray}) where {F} = foreach(x -> onblocks(f, x), x)
-# onblocks(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onblocks(f, x), x)
-# onblocks(f::F, x::CachedArray) where {F} = f(metadata(x))
-#
-# @generated function onblocks(f::F, x::T) where {F,T}
-#     iszero(fieldcount(T)) && return :(nothing)
-#     exprs = [:(onblocks(f, (x.$fieldname))) for fieldname in fieldnames(T)]
-#     return quote
-#         $(exprs...)
-#     end
-# end
+#####
+##### For analyzing arbitrary structs.
+#####
 
+onobjects(f::F, x::AbstractArray{<:AbstractArray}) where {F} =
+    foreach(x -> onobjects(f, x), x)
+onobjects(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onobjects(f, x), x)
+onobjects(f::F, x::CachedArray) where {F} = f(x.object)
+
+@generated function onobjects(f::F, x::T) where {F,T}
+    iszero(fieldcount(T)) && return :(nothing)
+    exprs = [:(onobjects(f, (x.$fieldname))) for fieldname in fieldnames(T)]
+    return quote
+        $(exprs...)
+    end
+end
+
+#####
+##### Recursively gather all objects
+#####
+
+function findobjects!(q::Expr, tags, sym, ::Type{T}) where {T}
+    gf = GlobalRef(Core, :getfield)
+    for f in Base.OneTo(fieldcount(T))
+        TF = fieldtype(T, f)
+        skip = all(
+            identity,
+            (
+                !Base.isconcretetype(TF),
+                Base.isbitstype(TF),
+                Base.isprimitivetype(TF),
+                iszero(fieldcount(TF)),
+            ),
+        )
+        skip && continue
+
+        gfcall = Expr(:call, gf, sym, f)
+        newsym = gensym(sym)
+        if TF <: Object
+            push!(q.args, Expr(:(=), newsym, gfcall))
+            push!(tags, newsym)
+        else
+            newtags = []
+            newq = :()
+            findobjects!(newq, newtags, newsym, TF)
+            if !isempty(newtags)
+                push!(q.args, Expr(:(=), newsym, gfcall))
+                append!(q.args, newq.args)
+                append!(tags, newtags)
+            end
+        end
+    end
+end
+
+@generated function slurp(x::T) where {T}
+    body = Expr(:block)
+    tags = Symbol[]
+    findobjects!(body, tags, :x, T)
+    tuple = :(($(tags...),))
+    push!(body.args, tuple)
+    return body
+end
+
+#####
+##### No Escape
+#####
+
+function noescape(manager::CacheManager, f::F, args::Vararg{Any,N}; kw...) where {F,N}
+    start = readid(manager)
+    result = f(args...; kw...)
+    objects = slurp(result)
+    saveids = map(x -> getid(metadata(x)), objects)
+    stop = readid(manager) - 1
+
+    @spinlock alloc_lock(manager) begin
+        backedges = manager.map.dict
+        for id = start:stop
+            if !in(id, saveids)
+                backedge = get(backedges, id, nothing)
+                backedge === nothing && continue
+
+                # Back edge exists - free the result
+                unsafe_free(manager, backedge)
+            end
+        end
+    end
+    return result
+end
+
+macro noescape(manager, fn)
+    fn.head == :call || error("Can only handle function calls!")
+    args = fn.args
+    if args[2] isa Expr && args[2].head == :parameters
+        kw = args[2].args
+        deleteat!(args, 2)
+    else
+        kw = Any[]
+    end
+    args = map(esc, args)
+    kw = map(esc, kw)
+    return :(noescape($(esc(manager)), $(args...); $(kw...)))
+end

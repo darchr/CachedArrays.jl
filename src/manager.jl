@@ -135,6 +135,7 @@ function CacheManager(
 end
 
 getid(manager::CacheManager) = Threads.atomic_add!(manager.idcount, one(UInt64))
+readid(manager::CacheManager) = manager.idcount[]
 
 # Can only GC if all objects tracked via backedges have been collected.
 function cangc(manager::CacheManager)
@@ -320,6 +321,11 @@ end
         ptrptr = Ptr{Ptr{Nothing}}(blockpointer(object))
         old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
         isnull(old) || free(manager(object), ptr)
+    end
+
+    function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
+        old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
+        isnull(old) || free(manager, datapointer(block))
     end
 else
     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))

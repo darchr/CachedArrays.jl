@@ -3,6 +3,7 @@ module CachedArrays
 export CachedArray,
     ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
 export @annotate, tocached
+export onobjects, slurp, @noescape
 
 # base
 import Base: @lock
