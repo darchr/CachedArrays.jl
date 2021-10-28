@@ -27,9 +27,7 @@ struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
 
     # Inner constructor - do a type check and make sure the finalizer is attached.
     function CachedArray{T,N}(
-        object::Object{M},
-        dims::NTuple{N,Int},
-        status::S = NotBusy(),
+        object::Object{M}, dims::NTuple{N,Int}, status::S = NotBusy()
     ) where {T,N,S,M}
         if !isbitstype(T)
             throw(ArgumentError("Cannot construct a `CachedArray` from non-isbits types!"))
@@ -61,16 +59,13 @@ manager(A::CachedArray) = manager(object(A))
 # Don't let functions normally take pointers to un-acquired CachedArrays.
 Base.pointer(A::CachedArray) = unsafe_pointer(A)
 function Base.pointer(A::UnreadableCachedArray)
-    error("Cannot take a pointer to to a `NotBusy` CachedArray")
+    return error("Cannot take a pointer to to a `NotBusy` CachedArray")
 end
 
 # Consructors
 CachedArray(x::Array{T,N}, manager; kw...) where {T,N} = CachedArray{T,N}(x, manager; kw...)
 function CachedArray{T,N}(
-    x::Array{T,N},
-    manager;
-    status = NotBusy(),
-    priority = PreferLocal,
+    x::Array{T,N}, manager; status = ReadWrite(), priority = PreferLocal
 ) where {T,N}
     object = alloc(manager, sizeof(x))
     unsafe_copyto!(Ptr{T}(pointer(object)), pointer(x), length(x))
@@ -135,9 +130,13 @@ end
 Base.dataids(A::CachedArray) = (UInt(pointer(A)),)
 
 function Base.reshape(x::CachedArray{T,M,S}, dims::NTuple{N,Int}) where {T,N,M,S}
-    throw_dmrsa(dims, len) = throw(
-        DimensionMismatch("new dimensions $(dims) must be consistent with array size $len"),
-    )
+    function throw_dmrsa(dims, len)
+        return throw(
+            DimensionMismatch(
+                "new dimensions $(dims) must be consistent with array size $len"
+            ),
+        )
+    end
 
     if prod(dims) != length(x)
         throw_dmrsa(dims, length(x))
@@ -180,8 +179,7 @@ end
 # A more general solution would gather all such arrays and check that all the CachedArrays
 # are the same.
 function Base.similar(
-    bc::Broadcast.Broadcasted{Broadcast.ArrayStyle{CachedArray}},
-    ::Type{ElType},
+    bc::Broadcast.Broadcasted{Broadcast.ArrayStyle{CachedArray}}, ::Type{ElType}
 ) where {ElType}
     cached = findT(CachedArray, bc)
     return similar(cached, ElType, axes(bc))
@@ -242,10 +240,7 @@ for (typ, fn) in __fnmap
         # Optional Telemetry
         @telemetry manager(x) begin
             telemetry_change(
-                gettelemetry(manager(x)),
-                getid(metadata(x)),
-                _sym(S),
-                $(QuoteNode(typ)),
+                gettelemetry(manager(x)), getid(metadata(x)), _sym(S), $(QuoteNode(typ))
             )
         end
         # unpack any potential policy updates.
@@ -256,8 +251,7 @@ for (typ, fn) in __fnmap
     # Define `Base.convert` in terms of the "release, readable, writable" methods
     # defined above.
     @eval function Base.convert(
-        ::Type{CachedArray{T,N,$typ,M}},
-        x::CachedArray{T,N,S,M},
+        ::Type{CachedArray{T,N,$typ,M}}, x::CachedArray{T,N,S,M}
     ) where {T,N,S,M}
         return $fn(x)
     end

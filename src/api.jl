@@ -8,25 +8,25 @@ struct Cacheable end
 abstract type AbstractMetadata end
 struct NoMeta <: AbstractMetadata end
 
-metastyle(x) = NoMeta()
+metastyle(_) = NoMeta()
 metadata(x) = metadata(x, metastyle(x))
 metadata(x, ::NoMeta) = error("Cannot get metadata for objects of type $(typeof(x))")
 
 # Metadata API
 # TODO: rename to "local" setdirty?
-setdirty!(A::AbstractMetadata, ::Bool) = error("Implement `setdirty!")
-isdirty(A::AbstractMetadata) = error("Implement `isdirty`!")
+setdirty!(::AbstractMetadata, ::Bool) = error("Implement `setdirty!")
+isdirty(::AbstractMetadata) = error("Implement `isdirty`!")
 
-getid(A::AbstractMetadata) = error("Implement `getid`!")
-getpool(A::AbstractMetadata) = error("Implement `getpool`!")
+getid(::AbstractMetadata) = error("Implement `getid`!")
+getpool(::AbstractMetadata) = error("Implement `getpool`!")
 
 """
     getsibling(A::T) where T <: AbstractMeta
 
 Return either `nothing` or an instance ot `T` the sibling of `A`.
 """
-getsibling(A::AbstractMetadata) = error("Implement `getsibling`!")
-setsibling!(A::T, B::T) where {T <: AbstractMetadata} = error("Implement `setsibling!`")
+getsibling(::AbstractMetadata) = error("Implement `getsibling`!")
+setsibling!(::T, ::T) where {T <: AbstractMetadata} = error("Implement `setsibling!`")
 
 #####
 ##### Default Definitions
@@ -64,21 +64,6 @@ function prefetch!(::Cacheable, A; kw...)
     end
 end
 
-# function shallowfetch!(::Cacheable, A; kw...)
-#     _manager = manager(A)
-#     @spinlock alloc_lock(_manager) remove_lock(_manager.freebuffer) begin
-#         actuate!(
-#             LocalPool(),
-#             A,
-#             _manager;
-#             copydata = false,
-#             updatebackedge = true,
-#             freeblock = false,
-#             kw...,
-#         )
-#     end
-# end
-
 function evict!(::Cacheable, A; kw...)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) begin
@@ -92,22 +77,6 @@ function softevict!(::Cacheable, A)
     _manager = manager(A)
     @spinlock alloc_lock(_manager) softevict!(_manager.policy, _manager, metadata(A))
 end
-
-# function _unsafe_track!(manager)
-#     token = @spinlock alloc_lock(manager) begin
-#         _unsafe_track!(manager.policy)
-#     end
-#     return token
-# end
-#
-# function _unsafe_untrack!(manager, token, return_value)
-#     # Optimization - check before acquiring the lock
-#     token == false && return nothing
-#     @spinlock alloc_lock(manager) begin
-#         _unsafe_untrack!(manager, manager.policy, token, return_value)
-#     end
-#     return nothing
-# end
 
 # TODO: This is such a hack ...
 unsafe_free(::Cacheable, A) = unsafe_free(A.object)

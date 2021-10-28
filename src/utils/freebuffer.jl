@@ -15,6 +15,7 @@ candrain(buf::FreeBuffer) = !isempty(buf.add)
 
 function Base.push!(buf::FreeBuffer, x)
     @spinlock add_lock(buf) begin
+        @assert !isqueued(x)
         # Indicate that this object has been queued for freeing.
         # Helps with eviction logic.
         markqueued!(x)

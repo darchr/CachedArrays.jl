@@ -4,7 +4,7 @@
 
 # Check invariants between the CacheManager and the managed heaps.
 function check(manager::CacheManager)
-    #@spinlock alloc_lock(manager) maybe_cleanup!(manager)
+    @spinlock alloc_lock(manager) maybe_cleanup!(manager)
 
     passed = true
     if !check(manager.remote_heap)

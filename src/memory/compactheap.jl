@@ -51,7 +51,7 @@ function CompactHeap(
 
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
-    freelists = [Freelist{Block}() for _ = Base.OneTo(numbins)]
+    freelists = [Freelist{Block}() for _ in Base.OneTo(numbins)]
 
     heap = CompactHeap{T}(
         allocator,
@@ -292,6 +292,7 @@ function free(heap::CompactHeap, ptr::Ptr{Nothing})
         block.orphaned = true
         return nothing
     end
+    block.queued = false
     block.free = true
     heap.allocated -= sizeof(block)
     putback!(heap, block)
@@ -303,18 +304,26 @@ end
 #####
 
 function nextfree(heap, block = baseblock(heap))
-    while block !== nothing && (!isfree(block) || block.queued)
+    while block !== nothing && !isfree(block)
         block = walknext(heap, block)
     end
     return block
 end
 
 """
-    defrag!(f::F, heap::CompactHeap; [nthreads])
+    defrag!(f::F, heap::CompactHeap; [nthreads], [queued_callback])
 
 Defragment `heap`. Callback function `f` is given an ID and a new block.
+If a block is marked as `queued`, then, by default, we can't touch it.
+However, the caller may provide a zero argument `queued_callback` which must free this
+block, in which case defragmentation may continue.
 """
-function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {F}
+function defrag!(
+    f::F,
+    heap::CompactHeap;
+    nthreads = Threads.nthreads(),
+    queued_callback = nothing,
+) where {F}
     @checknothing freeblock = nextfree(heap)
     @checknothing block = walknext(heap, freeblock)
 
@@ -322,8 +331,17 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         # By the invariants we keep on the heap, the next block should be not-free.
         # However, it MIGHT be queued for deletion, in which case, we can't move it.
         if block.queued
-            @checknothing freeblock = nextfree(heap, block)
-            @checknothing block = walknext(heap, freeblock)
+            if queued_callback !== nothing
+                queued_callback()
+                # Recurse to begin the walk again since it's possible that blocks
+                # we've already visited have now been cleaned up.
+                # println("REWALKING!")
+                defrag!(f, heap; nthreads, queued_callback)
+                return nothing
+            else
+                @checknothing freeblock = nextfree(heap, block)
+                @checknothing block = walknext(heap, freeblock)
+            end
             continue
         end
 
@@ -333,7 +351,7 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
 
         # Now, we need to move "block" to "freeblock" and then fixup the heap.
         id = block.id
-        safeprint("Defrag: Moving $id")
+        # safeprint("Defrag: Moving $id")
         pool = block.pool
         block.backsize = freeblock.backsize
         freeblock_size = freeblock.size
@@ -366,7 +384,7 @@ function defrag!(f::F, heap::CompactHeap; nthreads = Threads.nthreads()) where {
         freeblock.size = freeblock_size
         freeblock.free = true
 
-        # TODO: In all likely hood, we're just going to be removing the freeblock again.
+        # TODO: In all likelyhood, we're just going to be removing the freeblock again.
         # However, dealing with queued blocks makes this tricky so do the conservative
         # thing for now.
         putback!(heap, freeblock)
@@ -510,7 +528,7 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Polyester.@batch per=core for i in 1:4096:sizeof(heap)
+    Polyester.@batch per = core for i = 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
     end
     return nothing
@@ -519,7 +537,7 @@ end
 function touchheap(heap::CompactHeap)
     v = zeros(UInt8, Threads.nthreads())
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Polyester.@batch per=core for i in 1:64:sizeof(heap)
+    Polyester.@batch per = core for i = 1:64:sizeof(heap)
         v[Threads.threadid()] += unsafe_load(ptr, i)
     end
     return sum(v)

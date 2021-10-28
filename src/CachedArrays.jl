@@ -7,7 +7,7 @@ module CachedArrays
 export CachedArray,
     ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
 export @annotate, tocached
-export onobjects, slurp, @noescape
+export onobjects, @blockobjects, findobjects, @noescape
 
 # state transitions
 export readable, writable, release
@@ -109,6 +109,7 @@ include("utils/utils.jl")
 include("utils/findnexttree.jl")
 include("utils/freebuffer.jl")
 include("utils/lru.jl")
+include("object.jl")
 
 include("api.jl")
 include("allocators.jl")
@@ -134,6 +135,7 @@ include("telemetry/telemetry.jl")
 # Fast "memcpy"
 include("memcpy.jl")
 include("lib.jl")
+include("api2.jl")
 
 #####
 ##### Keep track of Managers

@@ -117,22 +117,23 @@ function policy_new_alloc(
     if priority != ForceRemote
         @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
     end
-
-    # Fallback path - allocate remotely.
-    # If we're getting close to filling up the remote pool, do an emergency full GC.
-    # allocated, total = getstate(getheap(manager, RemotePool()))
-    # if allocated / total >= 0.80
-    #     # Trigger full GC and try to get pending finalizers to run.
-    #     GC.gc(true)
-    # end
-
     @return_if_exists ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
+
+    # Failed so far - try again if we have enough memory locally to defrag.
+    allocated, total = getstate(getheap(manager, LocalPool()))
+    if (total - allocated) > bytes
+        @show (total, allocated, bytes)
+        defrag!(manager, policy)
+    end
+    @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
+
     @show manager
     error("Ran out of memory!")
 end
 
 function defrag!(manager, policy::OptaneTracker = manager.policy)
-    defrag!(getheap(manager, LocalPool())) do id, newblock, oldblock
+    cb = () -> unsafe_cleanup!(manager)
+    defrag!(getheap(manager, LocalPool()); queued_callback = cb) do _, newblock, oldblock
         # First, we need to check if this is even the primary block for the corresponding
         # object.
         #
@@ -142,7 +143,7 @@ function defrag!(manager, policy::OptaneTracker = manager.policy)
         # This may change ...
         primary = getprimary(manager, oldblock)
         if primary === oldblock
-            old = unsafe_setprimary!(manager, oldblock, newblock; unsafe = true)
+            _ = unsafe_setprimary!(manager, oldblock, newblock; unsafe = true)
             @check delete!(policy, oldblock; len = length(oldblock))
             push!(policy, newblock, pool; len = length(oldblock))
         end

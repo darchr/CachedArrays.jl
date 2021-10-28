@@ -51,13 +51,7 @@ function Base.iterate(heap::AbstractHeap, block)
     return (block, block)
 end
 
-function Base.length(heap::AbstractHeap)
-    count = 0
-    for _ in heap
-        count += 1
-    end
-    return count
-end
+Base.length(heap::AbstractHeap) = count((_...) -> true, heap)
 
 # AbstractHeaps should keep the `block.size` feature.
 function walknext(heap::AbstractHeap, block::Block)

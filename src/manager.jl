@@ -325,7 +325,7 @@ end
 
     function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
         old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
-        isnull(old) || free(manager, datapointer(block))
+        isnull(old) || free(manager, block)
     end
 else
     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
