@@ -239,7 +239,7 @@ onobjects(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onobjects(f
 onobjects(f::F, x::CachedArray) where {F} = f(x.object)
 
 @generated function onobjects(f::F, x::T) where {F,T}
-    iszero(fieldcount(T)) && return :(nothing)
+    (isbitstype(T) || iszero(fieldcount(T))) && return :(nothing)
     exprs = [:(onobjects(f, (x.$fieldname))) for fieldname in fieldnames(T)]
     return quote
         $(exprs...)
@@ -254,7 +254,7 @@ function findobjects!(q::Expr, tags, sym, ::Type{T}) where {T}
     gf = GlobalRef(Core, :getfield)
     for f in Base.OneTo(fieldcount(T))
         TF = fieldtype(T, f)
-        skip = all(
+        skip = any(
             identity,
             (
                 !Base.isconcretetype(TF),
