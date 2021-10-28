@@ -1,9 +1,20 @@
 module CachedArrays
 
+#####
+##### Exports
+#####
+
 export CachedArray,
     ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
 export @annotate, tocached
 export onobjects, slurp, @noescape
+
+# state transitions
+export readable, writable, release
+
+####
+#### Deps
+####
 
 # base
 import Base: @lock

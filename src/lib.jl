@@ -239,30 +239,37 @@ onobjects(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onobjects(f
 onobjects(f::F, x::CachedArray) where {F} = f(x.object)
 
 @generated function onobjects(f::F, x::T) where {F,T}
-    (isbitstype(T) || iszero(fieldcount(T))) && return :(nothing)
+    (isbitstype(T) || iszero(fieldcount(T))) && return :()
     exprs = [:(onobjects(f, (x.$fieldname))) for fieldname in fieldnames(T)]
     return quote
         $(exprs...)
     end
 end
 
+macro blockobjects(type)
+    return :(onobjects(f::F, _::$(esc(type))) where {F} = nothing)
+end
+
 #####
 ##### Recursively gather all objects
 #####
+
+function findhelper(::Type{T}) where {T}
+    q = :()
+    tags = Symbol[]
+    findobjects!(q, tags, :x, T)
+    return q, tags
+end
 
 function findobjects!(q::Expr, tags, sym, ::Type{T}) where {T}
     gf = GlobalRef(Core, :getfield)
     for f in Base.OneTo(fieldcount(T))
         TF = fieldtype(T, f)
-        skip = any(
-            identity,
-            (
-                !Base.isconcretetype(TF),
-                Base.isbitstype(TF),
-                Base.isprimitivetype(TF),
-                iszero(fieldcount(TF)),
-            ),
-        )
+        skip =
+            !Base.isconcretetype(TF) ||
+            Base.isbitstype(TF) ||
+            Base.isprimitivetype(TF) ||
+            iszero(fieldcount(TF))
         skip && continue
 
         gfcall = Expr(:call, gf, sym, f)
