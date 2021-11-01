@@ -166,6 +166,8 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
     if isqueued(block)
         return nothing
     end
+    #safeprint("Prefetching block $(getid(block)) with size $(block.size)"; force = true)
+
     # Allocate and move.
     # Don't free the old block since we're functioning as a cache.
     ptr = unsafe_alloc_direct(LocalPool(), manager, length(block), getid(block))
@@ -252,6 +254,7 @@ function eviction_callback(manager, policy, block::Block)
     # don't leave the heap in an undefined state.
     ptr = unsafe_alloc_direct(RemotePool(), manager, length(block), getid(block))
     ptr === nothing && return true
+    #safeprint("Evicting block $(getid(block)) with size $(block.size)"; force = true)
 
     newblock = unsafe_block(ptr)
     copyto!(newblock, block, manager)
