@@ -122,7 +122,6 @@ function policy_new_alloc(
     # Failed so far - try again if we have enough memory locally to defrag.
     allocated, total = getstate(getheap(manager, LocalPool()))
     if (total - allocated) > bytes
-        @show (total, allocated, bytes)
         defrag!(manager, policy)
     end
     @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)

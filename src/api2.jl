@@ -2,7 +2,7 @@
 ##### Annotation API
 #####
 
-function onobjects(f::F, x::AbstractArray{T}) where {F,T}
+function onobjects(f::F, x::Array{T}) where {F,T}
     isbitstype(T) || foreach(x -> onobjects(f, x), x)
     return nothing
 end
@@ -120,15 +120,23 @@ end
 ##### noescape
 #####
 
-function noescape(manager::CacheManager, f::F, args::Vararg{Any,N}; kw...) where {F,N}
+function noescape(
+    manager::CacheManager, ::Val{B}, f::F, args::Vararg{Any,N}; kw...
+) where {B,F,N}
     # Record the allocation ID in the manager before and after the call to `f`.
     # We the use `findobjects` on the returned result to gather any `Objects` that
     # might be present, extracting the `id` for these objects.
     start = readid(manager)
     result = f(args...; kw...)
     objects = findobjects(result)
-    saveids = map(x -> getid(metadata(x)), objects)
-    stop = readid(manager) - 1
+    if B
+        output_ids = map(x -> getid(metadata(x)), objects)
+        argument_ids = map(x -> getid(metadata(x)), findobjects((f, args...)))
+        saveids = (output_ids..., argument_ids...)
+    else
+        saveids = map(x -> getid(metadata(x)), objects)
+    end
+    stop = readid(manager)
 
     # For all allocations that were made between `start` and `stop`, perform
     # `unsafe_free` on those objects (if not present in the returned objects).
@@ -145,17 +153,7 @@ function noescape(manager::CacheManager, f::F, args::Vararg{Any,N}; kw...) where
     return result
 end
 
-"""
-    @noescape manager f(args...; kw...)
-
-Inform the CacheManager `manager` that intermediate allocations made during the call
-to `f` that are not present in the returned value are save to be reclaimed.
-
-**TODO**: In the future, we should be able to provide additional hooks to record
-potentially escaped allocations, in the case that one of the arguments is holding
-onto an array that gets reassigned.
-"""
-macro noescape(manager, fn)
+function noescape_impl(manager, params, fn)
     fn.head == :call || error("Can only handle function calls!")
     args = fn.args
     if args[2] isa Expr && args[2].head == :parameters
@@ -166,6 +164,52 @@ macro noescape(manager, fn)
     end
     args = map(esc, args)
     kw = map(esc, kw)
-    return :(noescape($(esc(manager)), $(args...); $(kw...)))
+    watchargs = params[:args]
+    return :(noescape($(esc(manager)), Val($watchargs), $(args...); $(kw...)))
+end
+
+default_noescape_kw() = Dict(:args => false)
+
+"""
+    @noescape manager [args=false] f(args...; kw...)
+
+Inform the CacheManager `manager` that intermediate allocations made during the call
+to `f` that are not present in the returned value are save to be reclaimed.
+
+A trailing `tuple` argument `others` can provide a further list of types to inspect in order
+to keep otherwise escaping types from being freed.
+"""
+macro noescape(manager, fn)
+    return noescape_impl(manager, default_noescape_kw(), fn)
+end
+
+macro noescape(manager, args...)
+    fn = last(args)
+
+    # Default keyword arguments
+    kw = default_noescape_kw()
+    kw_type_map = Dict(k => typeof(v) for (k, v) in kw)
+    for i in Base.OneTo(lastindex(args) - 1)
+        arg = args[i]
+        if arg.head != :(=)
+            error("Expected keyword arguments to be in the form `a=b`!")
+        end
+
+        # Match implemented keywords
+        name = arg.args[1]
+        value = arg.args[2]
+        expected_type = get(kw_type_map, name, nothing)
+        expected_type === nothing && error("Unknown keyword argument $(name)!")
+        if !isa(value, expected_type)
+            msg = """
+            Expected keyword argument $name to have type $expected_type.
+            Instead, it has type $(typeof(value))!
+            """
+            error(msg)
+        end
+        kw[name] = value
+    end
+    # Process keywords
+    return noescape_impl(manager, kw, fn)
 end
 

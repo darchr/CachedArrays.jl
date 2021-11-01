@@ -277,6 +277,7 @@ function unsafe_alloc_through_policy(
     id = getid(manager),
 )
     # Only attempt draining at the beginning of an allocation round.
+    #safeprint("Allocating $(bytes) for id $(id)"; force = true)
     candrain(manager.freebuffer) && unsafe_cleanup!(manager)
     ptr = policy_new_alloc(manager.policy, manager, bytes, id, priority)
     ptr === nothing && error("Allocation failed!")
@@ -310,7 +311,10 @@ end
     # a null pointer, in which case we definitely don't want to add this to the
     # free buffer.
     function free(manager::CacheManager, ptr::Ptr)
-        isnull(ptr) || free(manager, unsafe_block(ptr))
+        if !isnull(ptr)
+            block = unsafe_block(ptr)
+            free(manager, unsafe_block(ptr))
+        end
     end
 
     free(manager::CacheManager, block::Block) = push!(manager.freebuffer, block)
@@ -324,8 +328,10 @@ end
     end
 
     function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
+        isqueued(block) && return nothing
         old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
         isnull(old) || free(manager, block)
+        return nothing
     end
 else
     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
