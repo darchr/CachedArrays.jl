@@ -7,9 +7,9 @@ function onobjects(f::F, x::Array{T}) where {F,T}
     return nothing
 end
 
+onobjects(f::F, x::Object) where {F} = isnull(unsafe_pointer(x)) || f(x)
+onobjects(f::F, x::CachedArray) where {F} = onobjects(f, x.object)
 onobjects(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onobjects(f, x), x)
-onobjects(f::F, x::CachedArray) where {F} = f(x.object)
-onobjects(f::F, x::Object) where {F} = f(x)
 
 """
     onobjects(f, x)
@@ -134,7 +134,14 @@ function noescape(
         argument_ids = map(x -> getid(metadata(x)), findobjects((f, args...)))
         saveids = (output_ids..., argument_ids...)
     else
-        saveids = map(x -> getid(metadata(x)), objects)
+        saveids = map(objects) do o
+            # If an allocation happens to be for zero bytes, then CachedArrays
+            # will return a null pointer.
+            #
+            # Thus, we need to perform a null check here in order to avoid a segfault in
+            # these corner cases.
+            return isnull(unsafe_pointer(o)) ? zero(UInt) : getid(metadata(o))
+        end
     end
     stop = readid(manager)
 
@@ -153,19 +160,69 @@ function noescape(
     return result
 end
 
-function noescape_impl(manager, params, fn)
-    fn.head == :call || error("Can only handle function calls!")
-    args = fn.args
-    if args[2] isa Expr && args[2].head == :parameters
-        kw = args[2].args
-        deleteat!(args, 2)
+# So we can handle calls to our generated "__invoke__", the top level expression needs to
+# either:
+#
+# 1. Just be a straight up function call.
+# 2. Contain a call to `Base.invoke`.
+#
+# In the case of the latter, we only modify the outermost invoke.
+function find_invoke(manager, annotations, expr::Expr)
+    # Use a `Ref` for `success` to make the linter happy.
+    processed_invoke = Ref(false)
+    processed_tuple = Ref(false)
+    newexpr = MacroTools.prewalk(expr) do subexpr
+        processed_invoke[] && return subexpr
+        if isa(subexpr, Expr) && subexpr.head == :tuple && processed_tuple[] == false
+            processed_tuple[] = true
+            return esc(subexpr)
+        elseif isa(subexpr, Expr) && subexpr.head == :call && subexpr.args[1] == invoke
+            args, kw = extract_kw(subexpr.args[2:end], 1)
+
+            # Perform the proper nested escaping because dealing with nested macros
+            # is SUPER annoying.
+            #
+            # In all honesty, maybe we should teach `@annotate` how to correctly deal with
+            # calls to `@noescape` to simplify the whole implementation.
+            args[1] = esc(args[1])
+            kw = map(esc, kw)
+
+            processed_invoke[] = true
+            return :(noescape($manager, $(annotations...), invoke, $(args...); $(kw...)))
+        end
+        return subexpr
+    end
+    if processed_invoke[] == false || processed_tuple[] == false
+        error("Could not find a suitable subexpression!")
+    end
+    return newexpr
+end
+
+function extract_kw(args, pos = 2)
+    if args[pos] isa Expr && args[pos].head == :parameters
+        kw = args[pos].args
+        deleteat!(args, pos)
     else
         kw = Any[]
     end
-    args = map(esc, args)
-    kw = map(esc, kw)
+    return args, kw
+end
+
+function noescape_impl(manager, params, fn)
     watchargs = params[:args]
-    return :(noescape($(esc(manager)), Val($watchargs), $(args...); $(kw...)))
+    annotations = (Val(watchargs),)
+    manager = esc(manager)
+    # Simple case
+    if fn.head == :call
+        args, kw = extract_kw(fn.args)
+        args = map(esc, args)
+        kw = map(esc, kw)
+        return :(noescape($manager, $(annotations...), $(args...); $(kw...)))
+
+    # More complicated case.
+    else
+        return find_invoke(manager, annotations, fn)
+    end
 end
 
 default_noescape_kw() = Dict(:args => false)

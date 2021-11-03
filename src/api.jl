@@ -59,7 +59,7 @@ function prefetch!(::Cacheable, A; kw...)
         # object that owns this block ... so it should never have been garbage collected
         # in the first place.
         if maybe_cleanup!(_manager, getid(block)) == false
-            prefetch!(block, _manager.policy, _manager; readonly = isreadonly(A))
+            prefetch!(block, _manager.policy, _manager; kw...)
         end
     end
 end
