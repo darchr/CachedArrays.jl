@@ -25,7 +25,7 @@ If you would like to opt out your type from `onobjects` altogether, the convenie
 """
 @generated function onobjects(f::F, x::T) where {F,T}
     (isbitstype(T) || iszero(fieldcount(T))) && return :()
-    exprs = [:(onobjects(f, (x.$fieldname))) for fieldname in fieldnames(T)]
+    exprs = [:(onobjects(f, Core.getfield(x, $(QuoteNode(fieldname))))) for fieldname in fieldnames(T)]
     return quote
         $(exprs...)
     end
@@ -121,19 +121,20 @@ end
 #####
 
 function noescape(
-    manager::CacheManager, ::Val{B}, f::F, args::Vararg{Any,N}; kw...
-) where {B,F,N}
+    manager::CacheManager, ::Val{Large}, f::F, args::Vararg{Any,N}; kw...
+) where {Large,F,N}
     # Record the allocation ID in the manager before and after the call to `f`.
     # We the use `findobjects` on the returned result to gather any `Objects` that
     # might be present, extracting the `id` for these objects.
     start = readid(manager)
     result = f(args...; kw...)
-    objects = findobjects(result)
-    if B
-        output_ids = map(x -> getid(metadata(x)), objects)
-        argument_ids = map(x -> getid(metadata(x)), findobjects((f, args...)))
-        saveids = (output_ids..., argument_ids...)
+    if Large
+        saveids = Set{UInt}()
+        onobjects(result) do o
+            isnull(unsafe_pointer(o)) || push!(saveids, getid(metadata(o)))
+        end
     else
+        objects = findobjects(result)
         saveids = map(objects) do o
             # If an allocation happens to be for zero bytes, then CachedArrays
             # will return a null pointer.
@@ -209,8 +210,8 @@ function extract_kw(args, pos = 2)
 end
 
 function noescape_impl(manager, params, fn)
-    watchargs = params[:args]
-    annotations = (Val(watchargs),)
+    large = params[:large]
+    annotations = (Val(large),)
     manager = esc(manager)
     # Simple case
     if fn.head == :call
@@ -225,10 +226,10 @@ function noescape_impl(manager, params, fn)
     end
 end
 
-default_noescape_kw() = Dict(:args => false)
+default_noescape_kw() = Dict(:large => false)
 
 """
-    @noescape manager [args=false] f(args...; kw...)
+    @noescape manager [args=false] [large=false] f(args...; kw...)
 
 Inform the CacheManager `manager` that intermediate allocations made during the call
 to `f` that are not present in the returned value are save to be reclaimed.

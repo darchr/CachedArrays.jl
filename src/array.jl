@@ -113,7 +113,7 @@ Base.IndexStyle(::Type{<:CachedArray}) = Base.IndexLinear()
 
 function Base.similar(
     A::CachedArray,
-    eltyp::Type{T} = eltype(A),
+    ::Type{T} = eltype(A),
     dims::Tuple{Vararg{Int,N}} = size(A);
     status = ReadWrite(),
     priority = ForceLocal,
@@ -232,19 +232,16 @@ const __updates = Dict(
 
 for (typ, fn) in __fnmap
     # No-op if already correct type.
-    @eval function $fn(::Cacheable, x::CachedArray{T,N,$typ}) where {T,N}
-        return x
-    end
-
-    @eval function $fn(::Cacheable, x::CachedArray{T,N,S}) where {T,N,S}
-        # Optional Telemetry
-        @telemetry manager(x) begin
-            telemetry_change(
-                gettelemetry(manager(x)), getid(metadata(x)), _sym(S), $(QuoteNode(typ))
-            )
+    @eval $fn(::Cacheable, x::CachedArray{<:Any,<:Any,$typ}) = x
+    @eval function $fn(::Cacheable, x::CachedArray{T,N}) where {T,N}
+        if !isnull(unsafe_pointer(x.object))
+            # Optional Telemetry
+            @telemetry manager(x) begin
+                telemetry_change(gettelemetry(manager(x)), getid(metadata(x)), $(QuoteNode(typ)))
+            end
+            # unpack any potential policy updates.
+            $(__updates...)
         end
-        # unpack any potential policy updates.
-        $(__updates...)
         return CachedArray{T,N}(object(x), size(x), $typ())
     end
 

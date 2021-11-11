@@ -130,7 +130,7 @@ include("llvm.jl")
 using .LoadStore: LoadStore
 
 include("array.jl")
-include("telemetry/telemetry.jl")
+include("telemetry.jl")
 
 # Fast "memcpy"
 include("memcpy.jl")

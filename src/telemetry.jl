@@ -1,16 +1,18 @@
-# TODO: Finalize API...
-function telemetry_alloc end
-function telemetry_gc end
-function telemetry_change end
-function telemetry_move end
+@inline telemetry_alloc(::NoTelemetry, args...) = nothing
+
 
 #####
 ##### Telemetry
 #####
 
 @enum TelemetryAction::UInt begin
+    # Allocation
     AllocFast
     AllocSlow
+
+    # Dellocations
+    DeallocFast
+    DeallocSlow
 
     # Transitions
     ReadTransition
@@ -19,10 +21,11 @@ function telemetry_move end
     TransitionUnknown
 
     # Movement
-    MoveToLocal
-    MoveToRemote
+    PrimaryInLocal
+    PrimaryInRemote
 
     # Cleanup
+    UnsafeFreed
     GarbageCollected
 end
 
@@ -45,7 +48,7 @@ struct Telemetry
     # Map allocated IDs to their sequence of actions.
     logs::Dict{UInt, Vector{TelemetryRecord}}
     objects::Dict{UInt, AllocationRecord}
-    backtraces::Vector{BacktraceType}
+    backtraces::Dict{BacktraceType,Int}
     lock::Base.Threads.SpinLock
 end
 
@@ -53,7 +56,7 @@ function Telemetry()
     return Telemetry(
         Dict{UInt, Vector{TelemetryRecord}}(),
         Dict{UInt, AllocationRecord}(),
-        Vector{BacktraceType}(),
+        Dict{BacktraceType,Int}(),
         Base.Threads.SpinLock(),
     )
 end
@@ -64,6 +67,12 @@ end
 
 ids(telemetry::Telemetry) = sort(collect(keys(telemetry.logs)))
 getlog(telemetry::Telemetry, id) = telemetry.logs[id]
+
+function getkey(telemetry::Telemetry)
+    bt = backtrace()
+    backtraces = telemetry.backtraces
+    return get!(backtraces, bt, length(backtraces))
+end
 
 function Base.stacktrace(telemetry::Telemetry, record::TelemetryRecord)
     key = record.backtrace_key
@@ -85,28 +94,39 @@ end
 ##### Hooks
 #####
 
-function telemetry_alloc(telemetry::Telemetry, manager, bytes, id, ptr, location)
+function telemetry_alloc(telemetry::Telemetry, bytes, id, ptr, location)
     # Get the current time.
     now = time_ns()
-
     action = (location == Local) ? AllocFast : AllocSlow
     # Find where we are on the stack.
     # If this is a new location, mark it as such.
-    bt = backtrace()
-    backtraces = telemetry.backtraces
     allocation_record = AllocationRecord(id, bytes, UInt(ptr))
     @spinlock telemetry.lock begin
         telemetry.objects[id] = allocation_record
-        key = findfirst(isequal(bt), backtraces)
-        if key === nothing
-            push!(backtraces, bt)
-            key = length(backtraces)::Int
-        end
-
+        key = getkey(telemetry)
         v = get!(() -> TelemetryRecord[], telemetry.logs, id)
         push!(v, TelemetryRecord(now, key, action))
     end
     return nothing
+end
+
+function telemetry_dealloc(telemetry::Telemetry, id, location)
+    now = time_ns()
+    action = (location == Local) ? DeallocFast : DeallocSlow
+    @spinlock telemetry.lock begin
+        key = getkey(telemetry)
+        v = telemetry.logs[id]
+        push!(v, TelemetryRecord(now, key, action))
+    end
+end
+
+function telemetry_unsafefree(telemetry::Telemetry, id)
+    now = time_ns()
+    @spinlock telemetry.lock begin
+        key = getkey(telemetry)
+        v = telemetry.logs[id]
+        push!(v, TelemetryRecord(now, key, UnsafeFreed))
+    end
 end
 
 function telemetry_gc(telemetry::Telemetry, id)
@@ -118,7 +138,7 @@ function telemetry_gc(telemetry::Telemetry, id)
     return nothing
 end
 
-function telemetry_change(telemetry::Telemetry, id, from, to)
+function telemetry_change(telemetry::Telemetry, id, to)
     # Determine the state change
     now = time_ns()
     state = TransitionUnknown
@@ -132,26 +152,18 @@ function telemetry_change(telemetry::Telemetry, id, from, to)
 
     # Find where we are on the stack.
     # If this is a new location, mark it as such.
-    bt = backtrace()
-    backtraces = telemetry.backtraces
     @spinlock telemetry.lock begin
-        key = findfirst(isequal(bt), backtraces)
-        if key === nothing
-            push!(backtraces, bt)
-            key = length(backtraces)::Int
-        end
-
+        key = getkey(telemetry)
         log = telemetry.logs[id]
         push!(log, TelemetryRecord(now, key, state))
     end
     return nothing
 end
 
-function telemetry_move(telemetry::Telemetry, id, location, bytes)
-    action = location == Local ? MoveToLocal : MoveToRemote
+function telemetry_primary(telemetry::Telemetry, id, location)
+    action = location == Local ? PrimaryInLocal : PrimaryInRemote
     record = TelemetryRecord(time_ns(), 0, action)
     @spinlock telemetry.lock begin
-        # Log should exist, so don't get fancy trying to allocate it.
         push!(telemetry.logs[id], record)
     end
     return nothing
@@ -201,6 +213,43 @@ function estimate_lifetime(library::Vector{TelemetryRecord})
     end
 end
 
+function create_timeline(actions::Dict{String,Any}, objects)
+    timeline = Vector{NamedTuple{(:accesstime, :id, :size, :action),Tuple{Int,Int,Int,String}}}()
+    for (id_str, logs) in actions
+        sz = objects[id_str]["size"]::Int
+        id = parse(Int, id_str)
+        for log in logs
+            nt = (
+                accesstime = log["accesstime"]::Int,
+                id = id,
+                size = sz,
+                action = log["action"]::String
+            )
+            push!(timeline, nt)
+        end
+    end
+    sort!(timeline; by = x -> x.accesstime)
+    return timeline
+end
+
+function heap_usage(timeline::AbstractVector{<:NamedTuple}; name = "Fast")
+    alloc_str = "Alloc$name"
+    dealloc_str = "Dealloc$name"
+
+    usage = [(time = 0, utilization = 0)]
+    for nt in timeline
+        if (nt.action == alloc_str)
+            utilization = usage[end].utilization + nt.size
+            push!(usage, (time = nt.accesstime, utilization))
+        elseif (nt.action == dealloc_str)
+            utilization = usage[end].utilization - nt.size
+            push!(usage, (time = nt.accesstime, utilization))
+        end
+    end
+    popfirst!(usage)
+    return usage
+end
+
 #####
 ##### Save Telemetry
 #####
@@ -236,10 +285,14 @@ end
 struct TelemetrySerialization <: JSON.CommonSerialization end
 
 function JSON.lower(x::Telemetry)
+    # Reorder backtraces
+    reverse_backtrace = Dict(v => k for (k,v) in x.backtraces)
+    backtraces = [get(reverse_backtrace, i, "null") for i in Base.OneTo(length(reverse_backtrace))]
+
     return Dict(
         :logs => x.logs,
         :objects => x.objects,
-        :backtraces => x.backtraces,
+        :backtraces => backtraces,
     )
 end
 
@@ -252,9 +305,13 @@ function JSON.show_json(io::SC, ::TelemetrySerialization, x::BacktraceType)
 end
 
 function JSON.show_json(io::SC, ::TelemetrySerialization, x::Base.StackTraces.StackFrame)
-    # Don't worry about macrto expansions.
+    # Don't worry about macro expansions.
     if x.func == Symbol("macro expansion")
-        return nothing
+        return JSON.show_json(io, JSON.StandardSerialization(), "omitted")
+    end
+
+    if startswith(String(x.func), "top-level") || startswith(String(x.file), "REPL")
+        return JSON.show_json(io, JSON.StandardSerialization(), "omitted")
     end
 
     dict = Dict(
@@ -296,5 +353,49 @@ end
 
 function save_trace(io::IO, x::Telemetry)
     return JSON.show_json(io, TelemetrySerialization(), x; indent = 4)
-    #return JSON.show_json(io, TelemetrySerialization(), x)
+end
+
+#####
+##### For mistakes
+#####
+
+just_comma(str) = match(r"^\s*,\s*$", str) !== nothing
+just_space(str) = all(isspace, str)
+
+function clean_json(dst::AbstractString, src::AbstractString)
+    ispath(dst) && rm(dst)
+    open(dst; write = true, create = true) do io
+        # Load up things into an IOBuffer
+        buf = IOBuffer()
+        last = ""
+        for ln in eachline(src)
+            last = clean_json(buf, ln, last)
+        end
+        println(buf, last)
+        seekstart(buf)
+
+        # Stream out remainders
+        last = ""
+        for ln in eachline(buf)
+            if match(r"^\s*{\s*", ln) !== nothing && endswith(last, "}")
+                last = "$last,"
+            end
+            println(io, last)
+            last = ln
+        end
+        println(io, last)
+    end
+    return nothing
+end
+
+function clean_json(io::IO, str, last)
+    if just_comma(str)
+        last = replace(last, "," => "")
+    end
+    isempty(last) || println(io, last)
+
+    if just_comma(str) || just_space(str) || isempty(str)
+        return ""
+    end
+    return str
 end

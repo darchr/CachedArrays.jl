@@ -13,7 +13,11 @@ const KEYWORDS =
 for keyword in vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
     @eval $keyword(x::AbstractArray; kw...) = nothing
     @eval $keyword(x::CachedArray; kw...) = $keyword(Cacheable(), x; kw...)
-    @eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...))
+    @eval function $keyword(x, y, z...; kw...)
+        $keyword(x; kw...)
+        $keyword(y, z...; kw...)
+    end
+    #@eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...))
 end
 
 children(_) = ()
@@ -25,9 +29,9 @@ maybesuper(::T) where {T} = T
 
 # Helper function for dealing with wrapper types.
 # The wrapper type's `maybesuper` method gets defined by the `@wrapper` macro below.
-_maybesuper(x::T) where {T} = T
+_maybesuper(::T) where {T} = T
 _maybesuper(x::T, ::Any, y...) where {T} = _maybesuper(x, y...)
-_maybesuper(x::T, ::CachedArray, y...) where {T} = supertype(T)
+_maybesuper(::T, ::CachedArray, y...) where {T} = supertype(T)
 
 makecall(f::Symbol) = esc(:(CachedArrays.$f))
 

@@ -78,7 +78,7 @@ telemetry_enabled(::CacheManager{<:Any,<:Any,<:Any,NoTelemetry}) = false
 
 macro telemetry(manager, expr)
     return quote
-        if telemetry_enabled($(esc(manager)))
+        if !isa($(esc(manager)).telemetry, NoTelemetry)
             $(esc(expr))
         end
     end
@@ -183,6 +183,7 @@ end
 function unsafe_free_direct(manager::CacheManager, block::Block)
     ptr = datapointer(block)
     pool = getpool(block)
+    @telemetry manager telemetry_dealloc(gettelemetry(manager), block.id, pool)
     if pool == Local
         free(getheap(manager, LocalPool()), ptr)
     elseif pool == Remote
@@ -200,7 +201,7 @@ function unsafe_alloc_direct(
     @requires alloc_lock(manager)
     ptr = alloc(getheap(manager, pool), bytes, id)
     if ptr !== nothing
-        @telemetry manager telemetry_alloc(gettelemetry(manager), manager, bytes, id, ptr, T)
+        @telemetry manager telemetry_alloc(gettelemetry(manager), bytes, id, ptr, T)
     end
     return ptr
 end
@@ -270,6 +271,8 @@ end
 ##### Policy Level Allocations
 #####
 
+defrag!(manager::CacheManager) = defrag!(manager, manager.policy)
+
 function unsafe_alloc_through_policy(
     manager::CacheManager,
     bytes,
@@ -324,13 +327,21 @@ end
         ptr = unsafe_pointer(object)
         ptrptr = Ptr{Ptr{Nothing}}(blockpointer(object))
         old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
-        isnull(old) || free(manager(object), ptr)
+        if !isnull(old)
+            block = unsafe_block(old)
+            manager = object.manager
+            @telemetry manager telemetry_gc(gettelemetry(manager), getid(block))
+            free(manager, block)
+        end
     end
 
     function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
         isqueued(block) && return nothing
         old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
-        isnull(old) || free(manager, block)
+        if !isnull(old)
+            @telemetry manager telemetry_unsafefree(gettelemetry(manager), getid(block))
+            free(manager, block)
+        end
         return nothing
     end
 else
@@ -364,10 +375,11 @@ function unsafe_setprimary!(
     primary, backedge = map[id]
     @check primary == current
 
-    # Small change GC ran. Make sure that `current` is still not queued before comitting.
+    # Small chance GC ran. Make sure that `current` is still not queued before comitting.
     isqueued(primary) && return nothing
     old = atomic_ptr_xchg!(backedge, datapointer(next))
     map[id] = (next, backedge)
+    unsafe || @telemetry manager telemetry_primary(gettelemetry(manager), id, getpool(next))
 
     # Check that in fact the passed `current` block IS the primary segment.
     @check old == datapointer(current)
@@ -394,14 +406,14 @@ getprimary(manager::CacheManager, id::UInt) = first(getmap(manager, id))
 ##### Copyto!
 #####
 
-function Base.copyto!(dst::Block, src::Block, manager::CacheManager; include_header = false)
+function Base.copyto!(dst::Block, src::Block, ::CacheManager; include_header = false)
     nthreads = getpool(dst) == Remote ? 4 : Threads.nthreads()
-    @telemetry manager telemetry_move(
-        gettelemetry(manager),
-        getid(src),
-        getpool(dst),
-        sizeof(src),
-    )
+    # @telemetry manager telemetry_move(
+    #     gettelemetry(manager),
+    #     getid(src),
+    #     getpool(dst),
+    #     sizeof(src),
+    # )
 
     if include_header
         _memcpy!(pointer(dst), pointer(src), length(src); nthreads)

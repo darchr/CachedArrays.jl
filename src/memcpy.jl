@@ -162,7 +162,7 @@ function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)
     # Now, deal with the specified nmber of threads
     bytes_per_chunk, last_chunk = aligned_chunk(bytes, nthreads)
 
-    @timeit "Moving Data" Polyester.@batch per=core for i in Base.OneTo(nthreads)
+    @timeit "Memcpy" Polyester.@batch per=core for i in Base.OneTo(nthreads)
         offset = bytes_per_chunk * (i-1)
         copybytes = (i == nthreads) ? last_chunk : bytes_per_chunk
         unsafe_memcpy!(+, dest + offset, src + offset, copybytes)
@@ -172,14 +172,8 @@ function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)
 end
 
 const AVX512BYTES = 64
-
-# TODO: THe backwards direction doesn't actually work yet ...
-# I was trying to be too clever then bailed.
 _adjust(::typeof(+), x::Ptr{UInt8}, len) = x
-#_adjust(::typeof(-), x::Ptr{UInt8}, len) = x + len
-
 inv(::typeof(+)) = -
-#inv(::typeof(-)) = +
 
 """
     unsafe_memcpy!(f, dest::Ptr{UInt8}, src::Ptr{UInt8}, len)

@@ -14,9 +14,15 @@ evict!(A, ::LocalTracker, manager) = nothing
 function policy_new_alloc(::LocalTracker, manager, bytes, id, _::AllocationPriority)
     # See if it's time to GC.
     allocated, total = getstate(getheap(manager, LocalPool()))
-    if allocated / total > 0.8
+    if allocated / total > 0.9
         GC.gc(true)
     end
     @return_if_exists unsafe_alloc_direct(LocalPool(), manager, bytes, id)
     return nothing
+end
+
+function defrag!(manager, policy::LocalTracker)
+    # cb = () -> unsafe_cleanup!(manager)
+    # defrag!((_...,) -> nothing, getheap(manager, LocalPool()); queued_callback = cb)
+    # return nothing
 end

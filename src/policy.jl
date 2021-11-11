@@ -130,7 +130,7 @@ function policy_new_alloc(
     error("Ran out of memory!")
 end
 
-function defrag!(manager, policy::OptaneTracker = manager.policy)
+function defrag!(manager, policy::OptaneTracker)
     cb = () -> unsafe_cleanup!(manager)
     defrag!(getheap(manager, LocalPool()); queued_callback = cb) do _, newblock, oldblock
         # First, we need to check if this is even the primary block for the corresponding
@@ -204,11 +204,11 @@ end
 
 # TODO: Time since last GC?
 function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
-    allocated, total = getstate(getheap(manager, LocalPool()))
-    if allocated / total >= 0.90
-        # Trigger full GC and try to get pending finalizers to run.
-        GC.gc(false)
-    end
+    # allocated, total = getstate(getheap(manager, LocalPool()))
+    # if allocated / total >= 0.90
+    #     # Trigger full GC and try to get pending finalizers to run.
+    #     GC.gc(false)
+    # end
 
     # If allocation is successful, good!
     @return_if_exists ptr = unsafe_alloc_direct(LocalPool(), manager, bytes, id)
@@ -291,7 +291,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
 
     # Check this bin and all higher bins.
     for i in bin:N
-        lru = policy.evictable_objects[bin]
+        lru = policy.evictable_objects[i]
         if !isempty(lru)
             block = first(lru)
             @check getpool(block) == Local
@@ -302,7 +302,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
 
     # Try evicting not from the easily evictable trackers.
     for i in bin:N
-        lru = policy.regular_objects[bin]
+        lru = policy.regular_objects[i]
         if !isempty(lru)
             block = first(lru)
             @check getpool(block) == Local
