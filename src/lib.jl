@@ -130,7 +130,7 @@ function maybe_process_call(sym::Symbol)
         # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
         substr = Symbol(symstring[3:(end - 2)])
         if in(substr, KEYWORDS)
-            return substr
+            return :(CachedArrays.$substr)
         end
     end
     return sym
@@ -138,20 +138,9 @@ end
 
 function annotate_impl(fn)
     # Get the split version of the function.
-    def, oldargs = prepare_function(fn)
-
+    def = MacroTools.splitdef(fn)
     function process_item(x)
-        # We need to escape all arguments in the function signature in order to allow
-        # type annotations to be scoped correctly.
-        #
-        # As a result, every time we see one of the original argument symbols in the
-        # body of the function, we must escape it so that internal uses match the
-        # modified function signature.
-        if isa(x, Symbol) && in(x, oldargs)
-            return esc(x)
-        end
-
-        # Next, we handle inner function calls by looking for our magic keyhwords.
+        # Handle inner function calls by looking for our magic keyhwords.
         # If we find one of out magic keyword functions, replace it with a call to
         # the corresponding `CachedArrays` function.
         #
@@ -203,32 +192,6 @@ function annotate_impl(fn)
     # Process the body of the function, converting keywords into CachedArray calls
     # and splicing in the created "invoke" statement above.
     def[:body] = MacroTools.postwalk(process_item, def[:body])
-    return MacroTools.combinedef(def)
-end
-
-argname(x) = first(MacroTools.splitarg(x))
-function prepare_function(expr::Expr)
-    # Make the function definition complete for MacroTool's sake.
-    def = MacroTools.splitdef(expr)
-
-    # Record the symbols of the arguments to ensure we escape the symbols where necessary
-    # in the body of the macro.
-    #
-    # Also, capture the function name as well since it could belong to a callable struct.
-    oldargs = []
-    for arg in def[:args]
-        push!(oldargs, argname(arg))
-    end
-    push!(oldargs, argname(def[:name]))
-    for arg in def[:kwargs]
-        push!(oldargs, argname(arg))
-    end
-
-    # Get scoping of function definition correct.
-    def[:name] = esc(def[:name])
-    def[:args] = esc.(def[:args])
-    def[:whereparams] = esc.(def[:whereparams])
-    def[:kwargs] = esc.(def[:kwargs])
-    return def, oldargs
+    return esc(MacroTools.combinedef(def))
 end
 

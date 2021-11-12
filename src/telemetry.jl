@@ -1,6 +1,5 @@
 @inline telemetry_alloc(::NoTelemetry, args...) = nothing
 
-
 #####
 ##### Telemetry
 #####
@@ -283,6 +282,9 @@ end
 
 # Custom JSON serialization for Telemetry
 struct TelemetrySerialization <: JSON.CommonSerialization end
+struct NoBacktraces{T}
+    telemetry::T
+end
 
 function JSON.lower(x::Telemetry)
     # Reorder backtraces
@@ -293,6 +295,14 @@ function JSON.lower(x::Telemetry)
         :logs => x.logs,
         :objects => x.objects,
         :backtraces => backtraces,
+    )
+end
+
+function JSON.lower(x::NoBacktraces)
+    telemetry = x.telemetry
+    return Dict(
+        :logs => telemetry.logs,
+        :objects => telemetry.objects,
     )
 end
 
@@ -347,55 +357,55 @@ function JSON.show_json(io::SC, ::TelemetrySerialization, x::Core.MethodInstance
     return JSON.show_json(io, JSON.StandardSerialization(), tostring.(x.specTypes.parameters))
 end
 
-function save_trace(file::AbstractString, x::Telemetry)
+function save_trace(file::AbstractString, x::Union{Telemetry, NoBacktraces})
     open(io -> save_trace(io, x), file; write = true)
 end
 
-function save_trace(io::IO, x::Telemetry)
+function save_trace(io::IO, x::Union{Telemetry, NoBacktraces})
     return JSON.show_json(io, TelemetrySerialization(), x; indent = 4)
 end
 
-#####
-##### For mistakes
-#####
-
-just_comma(str) = match(r"^\s*,\s*$", str) !== nothing
-just_space(str) = all(isspace, str)
-
-function clean_json(dst::AbstractString, src::AbstractString)
-    ispath(dst) && rm(dst)
-    open(dst; write = true, create = true) do io
-        # Load up things into an IOBuffer
-        buf = IOBuffer()
-        last = ""
-        for ln in eachline(src)
-            last = clean_json(buf, ln, last)
-        end
-        println(buf, last)
-        seekstart(buf)
-
-        # Stream out remainders
-        last = ""
-        for ln in eachline(buf)
-            if match(r"^\s*{\s*", ln) !== nothing && endswith(last, "}")
-                last = "$last,"
-            end
-            println(io, last)
-            last = ln
-        end
-        println(io, last)
-    end
-    return nothing
-end
-
-function clean_json(io::IO, str, last)
-    if just_comma(str)
-        last = replace(last, "," => "")
-    end
-    isempty(last) || println(io, last)
-
-    if just_comma(str) || just_space(str) || isempty(str)
-        return ""
-    end
-    return str
-end
+# #####
+# ##### For mistakes
+# #####
+#
+# just_comma(str) = match(r"^\s*,\s*$", str) !== nothing
+# just_space(str) = all(isspace, str)
+#
+# function clean_json(dst::AbstractString, src::AbstractString)
+#     ispath(dst) && rm(dst)
+#     open(dst; write = true, create = true) do io
+#         # Load up things into an IOBuffer
+#         buf = IOBuffer()
+#         last = ""
+#         for ln in eachline(src)
+#             last = clean_json(buf, ln, last)
+#         end
+#         println(buf, last)
+#         seekstart(buf)
+#
+#         # Stream out remainders
+#         last = ""
+#         for ln in eachline(buf)
+#             if match(r"^\s*{\s*", ln) !== nothing && endswith(last, "}")
+#                 last = "$last,"
+#             end
+#             println(io, last)
+#             last = ln
+#         end
+#         println(io, last)
+#     end
+#     return nothing
+# end
+#
+# function clean_json(io::IO, str, last)
+#     if just_comma(str)
+#         last = replace(last, "," => "")
+#     end
+#     isempty(last) || println(io, last)
+#
+#     if just_comma(str) || just_space(str) || isempty(str)
+#         return ""
+#     end
+#     return str
+# end
