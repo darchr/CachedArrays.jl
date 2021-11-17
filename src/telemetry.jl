@@ -212,17 +212,17 @@ function estimate_lifetime(library::Vector{TelemetryRecord})
     end
 end
 
-function create_timeline(actions::Dict{String,Any}, objects)
-    timeline = Vector{NamedTuple{(:accesstime, :id, :size, :action),Tuple{Int,Int,Int,String}}}()
+function create_timeline(actions::Dict{K,<:Any}, objects) where {K}
+    timeline = Vector{NamedTuple{(:accesstime, :id, :size, :action),Tuple{Int,Int,Int,Symbol}}}()
     for (id_str, logs) in actions
-        sz = objects[id_str]["size"]::Int
-        id = parse(Int, id_str)
+        sz = objects[id_str].size
+        id = id_str
         for log in logs
             nt = (
-                accesstime = log["accesstime"]::Int,
+                accesstime = log.accesstime,
                 id = id,
                 size = sz,
-                action = log["action"]::String
+                action = log.action
             )
             push!(timeline, nt)
         end
@@ -232,8 +232,8 @@ function create_timeline(actions::Dict{String,Any}, objects)
 end
 
 function heap_usage(timeline::AbstractVector{<:NamedTuple}; name = "Fast")
-    alloc_str = "Alloc$name"
-    dealloc_str = "Dealloc$name"
+    alloc_str = Symbol("Alloc$name")
+    dealloc_str = Symbol("Dealloc$name")
 
     usage = [(time = 0, utilization = 0)]
     for nt in timeline

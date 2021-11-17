@@ -168,7 +168,7 @@ function annotate_impl(fn)
                     tup = ($(args...),)
                     $(Base.invoke)(
                         $(def[:name]),
-                        Tuple{map(maybesuper, tup)...},
+                        Tuple{map(CachedArrays.maybesuper, tup)...},
                         tup...;
                         $(kwargs...),
                     )
