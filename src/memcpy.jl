@@ -161,7 +161,6 @@ function _memcpy!(dest::Ptr{UInt8}, src::Ptr{UInt8}, bytes; nthreads = nothing)
 
     # Now, deal with the specified nmber of threads
     bytes_per_chunk, last_chunk = aligned_chunk(bytes, nthreads)
-
     @timeit "Memcpy" Polyester.@batch per=core for i in Base.OneTo(nthreads)
         offset = bytes_per_chunk * (i-1)
         copybytes = (i == nthreads) ? last_chunk : bytes_per_chunk

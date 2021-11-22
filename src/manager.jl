@@ -407,7 +407,11 @@ getprimary(manager::CacheManager, id::UInt) = first(getmap(manager, id))
 #####
 
 function Base.copyto!(dst::Block, src::Block, ::CacheManager; include_header = false)
-    nthreads = getpool(dst) == Remote ? 4 : Threads.nthreads()
+    if src.size <= 4096
+        nthreads = 1
+    else
+        nthreads = getpool(dst) == Remote ? 8 : Threads.nthreads()
+    end
     # @telemetry manager telemetry_move(
     #     gettelemetry(manager),
     #     getid(src),
