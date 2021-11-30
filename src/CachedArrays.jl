@@ -26,8 +26,10 @@ import Mmap
 import Random
 
 # Dependencies
-import ArrayInterface
-import ConstructionBase
+# Import "constructorof" to allow external modules to extend "constructorof" without
+# directly invoking "ConstructablesBase'.
+# Of course, that's what's ultimately happening, but this is just cleaner.
+import ConstructionBase: ConstructionBase, constructorof
 import DataStructures
 import JSON
 import Polyester
@@ -35,68 +37,13 @@ import SIMD
 import MacroTools
 import TimerOutputs
 
-# DocString Helper
 using DocStringExtensions
 
-# Import "constructorof" to allow external modules to extend "constructorof" without
-# directly invoking "ConstructablesBase'.
-# Of course, that's what's ultimately happening, but this is just cleaner.
-import ConstructionBase: constructorof
-
-# Control whether asserts are active
-# Default to `true` for now because of development
-const DEBUG = true
-const VERBOSE = false
-const ENABLETIMING = true
-
-# Allow tracked Regions to be freed manually before garbage collection.
-const ALLOW_UNSAFE_FREE = true
-
-# If we're not in DEBUG mode, the @check macro will become a nop.
-# Otherwise, it will simply forward to `@assert`.
-@static if DEBUG
-    macro check(ex...)
-        return :(@assert($(esc.(ex)...)))
-    end
-
-    macro lock(ex...)
-        return :(Base.@lock($(esc.(ex...))))
-    end
-else
-    macro check(ex...)
-        return :()
-    end
-
-    macro lock(ex...)
-        return :(Base.@lock_nofail($(esc.(ex...))))
-    end
-end
-
-#####
-##### Optional Timing
-#####
-
-@static if ENABLETIMING
-    const GLOBAL_TIMER = TimerOutputs.TimerOutput()
-    macro timeit(label, expr)
-        return :(TimerOutputs.@timeit $(esc(GLOBAL_TIMER)) $(esc(label)) $(esc(expr)))
-    end
-
-    # Timing Functions
-    reset_timer!() = TimerOutputs.reset_timer!(GLOBAL_TIMER)
-    gettimer() = GLOBAL_TIMER
-else
-    macro timeit(label, expr)
-        return :($(esc(expr)))
-    end
-
-    reset_timer!() = nothing
-    gettimer() = nothing
-end
-
-# This turns out to be surprisingly useful ...
-donothing(x...; kw...) = nothing
-alwaysfalse(x...; kw...) = false
+const DEBUG = true              # Enable asserts
+const VERBOSE = false           # Diagnostic printing
+const ENABLETIMING = true       # Debug timing
+# const ALLOW_UNSAFE_FREE = true  # Enable the `unsafe_free` function.
+include("options.jl")
 
 #####
 ##### includes

@@ -186,32 +186,6 @@ function Base.similar(
 end
 
 #####
-##### ArrayInterface
-#####
-
-# Need to fill these out to make LoopVectorization happy.
-ArrayInterface.parent_type(x::CachedArray) = x
-ArrayInterface.defines_strides(::Type{<:CachedArray}) = true
-ArrayInterface.can_avx(::CachedArray) = true
-
-# Axes
-function ArrayInterface.axes_types(::Type{<:CachedArray{T,N}}) where {T,N}
-    return Tuple{Vararg{Base.OneTo{Int},N}}
-end
-ArrayInterface.contiguous_axis(::Type{<:CachedArray}) = ArrayInterface.One()
-function ArrayInterface.stride_rank(::Type{<:CachedArray{T,N}}) where {T,N}
-    return ArrayInterface.nstatic(Val(N))
-end
-function ArrayInterface.contiguous_batch_size(::Type{<:CachedArray{T,N}}) where {T,N}
-    return ArrayInterface.Zero()
-end
-function ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N}
-    return ArrayInterface._all_dense(Val{N}())
-end
-
-ArrayInterface.device(::Type{<:CachedArray}) = ArrayInterface.CPUPointer()
-
-#####
 ##### Conversion Functions
 #####
 

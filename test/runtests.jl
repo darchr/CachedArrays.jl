@@ -17,21 +17,23 @@ function inpool(manager, A, pool; primary_only = true)
     return in(id, CachedArrays.visible_ids(manager, pool; primary_only))
 end
 
-# include("utils/findnexttree.jl")
-# include("allocators.jl")
-#
-# include("memory/block.jl")
-# include("memory/freelist.jl")
-# include("memory/compactheap.jl")
-# include("memory/eviction.jl")
-# include("memcpy.jl")
-#
-# include("policy/lru.jl")
-#
-# include("manager.jl")
-# include("array/array.jl")
-# include("lib.jl")
-include("annotation.jl")
+include("utils/utils.jl")
+include("utils/findnexttree.jl")
+include("utils/lru.jl")
+include("utils/freebuffer.jl")
 
-# include("integration/corner.jl")
-# include("integration/stress.jl")
+include("allocators.jl")
+
+include("memory/block.jl")
+include("memory/freelist.jl")
+include("memory/compactheap.jl")
+include("memory/eviction.jl")
+include("memcpy.jl")
+
+include("manager.jl")
+include("array/array.jl")
+# include("lib.jl")
+# include("annotation.jl")
+
+include("integration/corner.jl")
+include("integration/stress.jl")

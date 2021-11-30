@@ -51,6 +51,7 @@ end
     @test getid(CachedArrays.metadata(B)) == 2
     @test haskey(manager.map, 2)
 
+    # Length of the underlying block should be larger than or equal the requested size.
     len = length(CachedArrays.metadata(B))
     @test len >= 500_000
     @test iszero(mod(sizeof(CachedArrays.metadata(B)), 2^minallocation))
@@ -71,8 +72,8 @@ end
     lock(CachedArrays.alloc_lock(manager)) do
         ptr = CachedArrays.unsafe_alloc_direct(PoolType{Local}(), manager, 500_000, id)
         @test ptr === nothing
-        @test CachedArrays.check(manager)
     end
+    @test CachedArrays.check(manager)
 
     lock(CachedArrays.alloc_lock(manager)) do
         # Okay, now we allocate a remote block for B, link as siblings, and set the
@@ -111,8 +112,8 @@ end
         map = CachedArrays.getmap(manager)
         new_block = CachedArrays.unsafe_block(unsafe_load(last(map[getid(block_remote)])))
         @test block_remote === new_block
-        @test CachedArrays.check(manager)
     end
+    @test CachedArrays.check(manager)
 
     # unsafe_free and marking.
     lock(CachedArrays.alloc_lock(manager)) do
@@ -139,8 +140,9 @@ end
         @test cleaned == true
         @test CachedArrays.isfree(block)
         @test CachedArrays.isfree(block_remote)
-        @test CachedArrays.check(manager)
     end
+    CachedArrays.unsafe_free(B)
+    @test CachedArrays.check(manager)
 end
 
 @testset "Testing Manager Cleanup 1" begin

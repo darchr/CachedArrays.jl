@@ -126,7 +126,7 @@ function policy_new_alloc(
     end
     @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
 
-    @show manager
+    @show bytes, manager
     error("Ran out of memory!")
 end
 

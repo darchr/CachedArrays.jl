@@ -46,6 +46,7 @@ Base.haskey(map::BackedgeMap, id) = haskey(map.dict, id)
 Base.length(map::BackedgeMap) = length(map.dict)
 Base.isempty(map::BackedgeMap) = isempty(map.dict)
 Base.keys(map::BackedgeMap) = keys(map.dict)
+Base.values(map::BackedgeMap) = values(map.dict)
 
 Base.iterate(map::BackedgeMap, s...) = iterate(map.dict, s...)
 
@@ -193,10 +194,7 @@ function unsafe_free_direct(manager::CacheManager, block::Block)
 end
 
 function unsafe_alloc_direct(
-    pool::PoolType{T},
-    manager::CacheManager,
-    bytes,
-    id::UInt,
+    pool::PoolType{T}, manager::CacheManager, bytes, id::UInt
 ) where {T}
     @requires alloc_lock(manager)
     ptr = alloc(getheap(manager, pool), bytes, id)
@@ -206,9 +204,13 @@ function unsafe_alloc_direct(
     return ptr
 end
 
+"""
+    direct_alloc(pool, manager, bytes, id) -> Object
+
+Allocate an object from `manager` in `pool`.
+"""
 function direct_alloc(pool::PoolType, manager::CacheManager, bytes, id::UInt)
     @spinlock alloc_lock(manager) begin
-        # TODO: What to do about zero sized allocations ...
         ptr = iszero(bytes) ? Ptr{Nothing}() : unsafe_alloc_direct(pool, manager, bytes, id)
         ptr === nothing && throw(AllocationException())
         return Object(ptr, manager)
@@ -309,45 +311,43 @@ end
 
 # Note: `push!` for the `FreeBuffer` is thread safe, so no synchonizations needs
 # to happen at this level.
-@static if ALLOW_UNSAFE_FREE
-    # If we allow "unsafe_free", then the pointer in a object will be replaced by
-    # a null pointer, in which case we definitely don't want to add this to the
-    # free buffer.
-    function free(manager::CacheManager, ptr::Ptr)
-        if !isnull(ptr)
-            block = unsafe_block(ptr)
-            free(manager, unsafe_block(ptr))
-        end
-    end
+# @static if ALLOW_UNSAFE_FREE
 
-    free(manager::CacheManager, block::Block) = push!(manager.freebuffer, block)
-
-    # TODO: What if this is called while movement is happening ...
-    function unsafe_free(object::Object)
-        ptr = unsafe_pointer(object)
-        ptrptr = Ptr{Ptr{Nothing}}(blockpointer(object))
-        old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
-        if !isnull(old)
-            block = unsafe_block(old)
-            manager = object.manager
-            @telemetry manager telemetry_gc(gettelemetry(manager), getid(block))
-            free(manager, block)
-        end
-    end
-
-    function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
-        isqueued(block) && return nothing
-        old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
-        if !isnull(old)
-            @telemetry manager telemetry_unsafefree(gettelemetry(manager), getid(block))
-            free(manager, block)
-        end
-        return nothing
-    end
-else
-    free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
-    unsafe_free(::Object) = nothing
+# If we allow "unsafe_free", then the pointer in a object will be replaced by
+# a null pointer, in which case we definitely don't want to add this to the
+# free buffer.
+function free(manager::CacheManager, block::Block)
+    push!(manager.freebuffer, block)
 end
+function free(manager::CacheManager, ptr::Ptr)
+    isnull(ptr) || free(manager, unsafe_block(ptr))
+end
+
+function unsafe_free(object::Object)
+    ptrptr = Ptr{Ptr{Nothing}}(blockpointer(object))
+    old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
+    if !isnull(old)
+        block = unsafe_block(old)
+        manager = object.manager
+        @telemetry manager telemetry_gc(gettelemetry(manager), getid(block))
+        free(manager, block)
+    end
+end
+
+function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
+    isqueued(block) && return nothing
+    old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
+    if !isnull(old)
+        @telemetry manager telemetry_unsafefree(gettelemetry(manager), getid(block))
+        free(manager, block)
+    end
+    return nothing
+end
+
+# else
+#     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
+#     unsafe_free(::Object) = nothing
+# end
 
 #####
 ##### Set primary

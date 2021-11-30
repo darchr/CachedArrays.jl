@@ -1,0 +1,2 @@
+struct DummyManager
+end

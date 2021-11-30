@@ -1,3 +1,7 @@
+#####
+##### Value-Priority pairs
+#####
+
 struct Priority{T}
     priority::Int
     val::T
@@ -8,7 +12,10 @@ Base.:(==)(a::P, b::P) where {P <: Priority} = a.priority == b.priority
 Base.hash(a::Priority, h::UInt = UInt(0x78907890)) = hash(a.priority, h)
 unwrap(x::Priority) = x.val
 
-# LRU Policy for eviction.
+#####
+##### LRU implementation
+#####
+
 const MutableMinHeap{T} = DataStructures.MutableBinaryHeap{T,Base.ForwardOrdering}
 mutable struct LRU{T}
     heap::MutableMinHeap{Priority{T}}

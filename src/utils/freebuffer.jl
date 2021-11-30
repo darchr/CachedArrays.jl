@@ -3,19 +3,16 @@ mutable struct FreeBuffer{T}
     add::Vector{T}
     remove::Vector{T}
     add_lock::Base.Threads.SpinLock
-    remove_lock::Base.Threads.SpinLock
 end
 
-FreeBuffer{T}() where {T} = FreeBuffer{T}(T[], T[], Threads.SpinLock(), Threads.SpinLock())
+FreeBuffer{T}() where {T} = FreeBuffer{T}(T[], T[], Threads.SpinLock())
 
 add_lock(buf::FreeBuffer) = buf.add_lock
-remove_lock(buf::FreeBuffer) = buf.remove_lock
-
 candrain(buf::FreeBuffer) = !isempty(buf.add)
 
 function Base.push!(buf::FreeBuffer, x)
     @spinlock add_lock(buf) begin
-        @assert !isqueued(x)
+        @check !isqueued(x)
         # Indicate that this object has been queued for freeing.
         # Helps with eviction logic.
         markqueued!(x)
@@ -23,10 +20,10 @@ function Base.push!(buf::FreeBuffer, x)
     end
 end
 
-# Special Case Pointers
-function Base.push!(buf::FreeBuffer{Ptr{Nothing}}, x::Ptr{Nothing})
-    @spinlock add_lock(buf) push!(buf.add, x)
-end
+# # Special Case Pointers
+# function Base.push!(buf::FreeBuffer{Ptr{Nothing}}, x::Ptr{Nothing})
+#     @spinlock add_lock(buf) push!(buf.add, x)
+# end
 
 # Assumes that the "remove" lock is already held.
 function unsafe_swap!(buf::FreeBuffer)

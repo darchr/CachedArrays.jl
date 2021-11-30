@@ -25,7 +25,6 @@ blockpointer(object::Object) = pointer_from_objref(object)
 free(object::Object) = free(manager(object), unsafe_pointer(object))
 metastyle(::Object) = BlockMeta()
 manager(object::Object) = object.manager
-Base.summarysize(object::Object) = metadata(object).size
 getid(o::Object) = getid(metadata(o))
 prefetch!(o::Object; kw...) = prefetch!(Cacheable(), o; kw...)
 
