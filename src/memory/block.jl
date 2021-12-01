@@ -50,7 +50,7 @@ struct PoolType{T} end
 #    the size of the block before this block.
 #    used to walk backward through the heap/
 
-struct Block <: AbstractMetadata
+struct Block
     ptr::Ptr{Nothing}
     # Inner constructor for ambiguity resolution
     Block(ptr::Ptr{Nothing}) = new(ptr)
@@ -77,13 +77,13 @@ unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 struct BlockMeta end
 metadata(x, ::BlockMeta) = unsafe_block(unsafe_pointer(x))
 
-# Reserved room in for each allocation.
-# Size is bytes
+# Reserved room in for each allocation (bytes).
 headersize() = 64
 
 function zerometa!(block::Block)
     ptr = Ptr{UInt8}(pointer(block))
     for i in Base.OneTo(headersize())
+        @_ivdep_meta
         unsafe_store!(ptr, zero(UInt8), i)
     end
     return nothing

@@ -91,6 +91,16 @@ end
     return iszero(mod) ? (div, T(64)) : (div+1, mod)
 end
 
+Base.@propagate_inbounds function isset(M::FindNextTree, index::Integer)
+    @boundscheck begin
+        index > M.length && throw(BoundsError(M, index))
+    end
+
+    run = @inbounds M.runs[length(M.runs)]
+    newindex, modindex = divrem64(index)
+    return hasentryat(@inbounds(run[newindex]), modindex)
+end
+
 # Setting and clearing entries.
 Base.@propagate_inbounds function setentry!(M::FindNextTree, index::Integer)
     @boundscheck begin
@@ -98,12 +108,12 @@ Base.@propagate_inbounds function setentry!(M::FindNextTree, index::Integer)
     end
 
     level = length(M.runs)
-    @inbounds while true
-        run = M.runs[level]
+    while true
+        run = @inbounds M.runs[level]
 
         newindex, modindex = divrem64(index)
-        update = !hasentry(run[newindex])
-        run[newindex] |= (one(UInt64) << (modindex-1))
+        @inbounds update = !hasentry(run[newindex])
+        @inbounds run[newindex] |= (one(UInt64) << (modindex-1))
 
         # Break out if either we don't need an update, or this is the top level.
         (update && level > 1) || break
@@ -119,12 +129,13 @@ Base.@propagate_inbounds function clearentry!(M::FindNextTree, index::Integer)
     end
 
     level = length(M.runs)
-    @inbounds while true
+    while true
         run = M.runs[level]
 
         newindex, modindex = divrem64(index)
-        run[newindex] &= ~(one(UInt64) << (modindex-1))
-        update = !hasentry(run[newindex])
+
+        @inbounds run[newindex] &= ~(one(UInt64) << (modindex-1))
+        @inbounds update = !hasentry(run[newindex])
         (update && level > 1) || break
         index = newindex
         level -= 1

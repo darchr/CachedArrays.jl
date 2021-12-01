@@ -12,9 +12,9 @@ export onobjects, @blockobjects, findobjects, @noescape
 # state transitions
 export readable, writable, release
 
-####
-#### Deps
-####
+#####
+##### Deps
+#####
 
 # base
 import Base: @lock
@@ -57,8 +57,6 @@ include("utils/findnexttree.jl")
 include("utils/freebuffer.jl")
 include("utils/lru.jl")
 include("object.jl")
-
-include("api.jl")
 include("allocators.jl")
 
 # Heap implementations
@@ -82,41 +80,41 @@ include("telemetry.jl")
 # Fast "memcpy"
 include("memcpy.jl")
 include("lib.jl")
-include("api2.jl")
+include("api.jl")
 
 #####
 ##### Keep track of Managers
 #####
 
-# When Managers get created - hold them in a global array to keep them from getting
-# GC'd before the arrays they track.
+# # When Managers get created - hold them in a global array to keep them from getting
+# # GC'd before the arrays they track.
+# #
+# # We can periodically GC the mangers to see if they are no longer holding onto anything,
+# # at which point we're free to reclaim their resources.
+# const GlobalManagers = CacheManager[]
 #
-# We can periodically GC the mangers to see if they are no longer holding onto anything,
-# at which point we're free to reclaim their resources.
-const GlobalManagers = CacheManager[]
-
-# Any allocators NOT attached to a CacheManager will be put here.
-# TODO: Allocator cleanup ...
-const GlobalHeaps = Any[]
-
-function gc_managers()
-    # Find all the managers that can be garbage collected.
-    #
-    # Trigger a full garbage collection before to clean up anything that may be holding
-    # onto a manager
-    GC.gc(true)
-
-    # Now, find all the managers that have been completely cleaned up.
-    i = findall(cangc, GlobalManagers)
-    i === nothing && return 0
-
-    # Remove the managers from this list and then run a full garbage collection to make sure
-    # they're well and completely gone.
-    deleteat!(GlobalManagers, i)
-    GC.gc(true)
-
-    # Return the number of managers we removed
-    return length(i)
-end
+# # Any allocators NOT attached to a CacheManager will be put here.
+# # TODO: Allocator cleanup ...
+# const GlobalHeaps = Any[]
+#
+# function gc_managers()
+#     # Find all the managers that can be garbage collected.
+#     #
+#     # Trigger a full garbage collection before to clean up anything that may be holding
+#     # onto a manager
+#     GC.gc(true)
+#
+#     # Now, find all the managers that have been completely cleaned up.
+#     i = findall(cangc, GlobalManagers)
+#     i === nothing && return 0
+#
+#     # Remove the managers from this list and then run a full garbage collection to make sure
+#     # they're well and completely gone.
+#     deleteat!(GlobalManagers, i)
+#     GC.gc(true)
+#
+#     # Return the number of managers we removed
+#     return length(i)
+# end
 
 end # module

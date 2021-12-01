@@ -48,9 +48,10 @@ isreadonly(::UnwritableCachedArray) = true
 
 # Cached API
 object(A::CachedArray) = A.object
-metastyle(::CachedArray) = BlockMeta()
+metadata(A::CachedArray) = metadata(object(A))
 datapointer(A::CachedArray) = datapointer(object(A))
 manager(A::CachedArray) = manager(object(A))
+unsafe_free(A::CachedArray) = unsafe_free(object(A))
 
 # Escape hatch to ALWAYS get a pointer, regardless of the status of the array.
 # Should only be called directly by `Base.pointer` or by the `CacheManager`.
@@ -206,8 +207,8 @@ const __updates = Dict(
 
 for (typ, fn) in __fnmap
     # No-op if already correct type.
-    @eval $fn(::Cacheable, x::CachedArray{<:Any,<:Any,$typ}) = x
-    @eval function $fn(::Cacheable, x::CachedArray{T,N}) where {T,N}
+    @eval $fn(x::CachedArray{<:Any,<:Any,$typ}) = x
+    @eval function $fn(x::CachedArray{T,N}) where {T,N}
         if !isnull(unsafe_pointer(x.object))
             # Optional Telemetry
             @telemetry manager(x) begin

@@ -15,6 +15,10 @@ end
 const donothing = Always(nothing)
 const alwaysfalse = Always(false)
 
+macro _ivdep_meta()
+    return Expr(:loopinfo, Symbol("julia.ivdep"))
+end
+
 #####
 ##### printing
 #####

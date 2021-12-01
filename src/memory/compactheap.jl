@@ -10,11 +10,25 @@ getbin(x::PowerOfTwo, sz) = ((sz - 1) >> x.val) + 1
 binsize(x::PowerOfTwo, bin) = bin << x.val
 
 #####
+##### Iterate over a vector of `Blocks` as a vector of `FreelistPtr`.
+#####
+
+struct FreelistIterator{T}
+    lists::Vector{T}
+end
+
+Base.length(x::FreelistIterator) = length(x.lists)
+Base.pointer(x::FreelistIterator, i) = pointer(x.lists, i)
+function Base.iterate(x::FreelistIterator, i = 1)
+    i > length(x) && return nothing
+    return FreelistPtr(pointer(x, i)), i + 1
+end
+
+#####
 ##### CompactHeap
 #####
 
-mutable struct CompactHeap{T} <: AbstractHeap
-    allocator::T
+mutable struct CompactHeap <: AbstractHeap
     minallocation::PowerOfTwo
 
     # Where is and what kind of memory do we have?
@@ -25,36 +39,42 @@ mutable struct CompactHeap{T} <: AbstractHeap
 
     # Maintaining freelist status
     status::FindNextTree
-    freelists::Vector{Freelist{Block}}
+    freelists::Vector{Block}
     canalloc::Bool
+
+    # Allocator token.
+    # Can be used to preserve `base` as long as the heap is still alive.
+    token::Any
 end
 
 topointer(ptr::Ptr) = ptr
 topointer(A::AbstractArray) = convert(Ptr{Nothing}, pointer(A))
 getstate(heap::CompactHeap) = (heap.allocated, heap.len)
 
+getfreelist(heap::CompactHeap, i) = FreelistPtr(pointer(heap.freelists, i))
+freelists(heap::CompactHeap) = FreelistIterator(heap.freelists)
+
 function CompactHeap(
-    allocator::T,
+    allocator::AbstractAllocator,
     sz;
     pool = Local,
     # Power of two
     minallocation = PowerOfTwo(21),
-) where {T}
+)
     minallocation = poweroftwo(minallocation)
 
     # Round down size to the nearest multiple of `minallocation`
     sz = (sz >> minallocation.val) << minallocation.val
 
     # Allocate the memory managed by this heap
-    base = allocate(allocator, sz)
+    base, token = allocate(allocator, sz)
     allocated = 0
 
     numbins = getbin(minallocation, sz)
     status = FindNextTree(numbins)
-    freelists = [Freelist{Block}() for _ in Base.OneTo(numbins)]
+    freelists = [Block() for _ in Base.OneTo(numbins)]
 
-    heap = CompactHeap{T}(
-        allocator,
+    heap = CompactHeap(
         minallocation,
         base,
         sz,
@@ -63,10 +83,11 @@ function CompactHeap(
         status,
         freelists,
         true,
+        token,
     )
 
     finalizer(heap) do x
-        free(x.allocator, x.base)
+        free(x.base, x.token)
     end
 
     # Add an entry for the biggest freelist.
@@ -93,7 +114,7 @@ baseaddress(heap::CompactHeap) = convert(UInt, heap.base)
 numbins(heap::CompactHeap) = length(heap.freelists)
 
 # The CompactHeap maintains backsizes, so we can also walk backwards.
-function walkprevious(heap::CompactHeap, block)
+function walkprevious(::CompactHeap, block)
     # Invariant, the first block will always have a backsize of zero.
     backsize = block.backsize
     if iszero(backsize)
@@ -109,24 +130,24 @@ end
 Sort all of the freelists in `heap` in order of increasing address.
 """
 function sortfreelists!(heap)
-    for freelist in heap.freelists
+    for freelist in freelists(heap)
         sort!(freelist)
     end
 end
 
 function Base.push!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
-    list = @inbounds(heap.freelists[bin])
+    list = @inbounds(getfreelist(heap, bin))
 
     isempty(list) && @inbounds(setentry!(heap.status, bin))
     push!(list, block)
     return nothing
 end
 
-popfreelist!(heap::CompactHeap, bin::Integer) = popfreelist!(heap, heap.freelists[bin], bin)
+popfreelist!(heap::CompactHeap, bin::Integer) = popfreelist!(heap, getfreelist(heap, bin), bin)
 Base.@propagate_inbounds function popfreelist!(
     heap::CompactHeap,
-    list::Freelist,
+    list::AbstractFreelist,
     bin::Integer,
 )
     block = pop!(list)
@@ -139,10 +160,13 @@ end
 #
 # Assume `sz` is a multiple of the heap granularity
 function Base.pop!(heap::CompactHeap, bin)
-    list = @inbounds heap.freelists[bin]
-    if !isempty(list)
-        return @inbounds(popfreelist!(heap, list, bin))
+    if isset(heap.status, bin)
+        return @inbounds(popfreelist!(heap, bin))
     end
+    # list = @inbounds getfreelist(heap, bin)
+    # if !isempty(list)
+    #     return @inbounds(popfreelist!(heap, list, bin))
+    # end
 
     # Okay, we don't have a block.
     # We need to get the next highest available block and split it.
@@ -182,10 +206,7 @@ function Base.pop!(heap::CompactHeap, bin)
 end
 
 function canpop(heap::CompactHeap, bin)
-    list = @inbounds heap.freelists[bin]
-    if !isempty(list)
-        return true
-    end
+    isset(heap.status, bin) && return true
 
     # Okay, we don't have a block.
     # We need to get the next highest available block and split it.
@@ -197,7 +218,7 @@ end
 
 function remove!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
-    list = @inbounds(heap.freelists[bin])
+    list = getfreelist(heap, bin)
     remove!(list, block)
     isempty(list) && @inbounds(clearentry!(heap.status, bin))
     return nothing
@@ -577,7 +598,7 @@ function freelist_status_invariant(heap::CompactHeap)
 
             if hasentryat(mask, j)
                 # There must be a key in the `freelists` dictionary and it must be non-empty
-                if isempty(heap.freelists[bin])
+                if isempty(getfreelist(heap, bin))
                     println(
                         "Heap has a `status` entry for bin $bin but no corresponding freelist bound",
                     )
@@ -585,7 +606,7 @@ function freelist_status_invariant(heap::CompactHeap)
                 end
             else
                 # No entry here - there must not be an entry in the dict.
-                if !isempty(heap.freelists[bin])
+                if !isempty(getfreelist(heap, bin))
                     println("Heap as no `status` entry for $bin but found a freelist")
                     passed = false
                 end
@@ -642,7 +663,7 @@ function free_invariant(heap::CompactHeap)
         end
     end
 
-    for (bin, freelist) in enumerate(heap.freelists)
+    for (bin, freelist) in enumerate(freelists(heap))
         if !isempty(freelist)
             if !haskey(counts, bin)
                 println("Found a freelist for bin $bin but no block of this size found")

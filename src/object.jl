@@ -21,12 +21,11 @@ end
 Base.pointer(object::Object) = object.ptr
 unsafe_pointer(object::Object) = object.ptr
 blockpointer(object::Object) = pointer_from_objref(object)
+metadata(object::Object) = unsafe_block(unsafe_pointer(object))
 
 free(object::Object) = free(manager(object), unsafe_pointer(object))
-metastyle(::Object) = BlockMeta()
 manager(object::Object) = object.manager
 getid(o::Object) = getid(metadata(o))
-prefetch!(o::Object; kw...) = prefetch!(Cacheable(), o; kw...)
 
 """
 $(TYPEDSIGNATURES)

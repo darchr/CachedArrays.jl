@@ -55,13 +55,13 @@ Base.iterate(map::BackedgeMap, s...) = iterate(map.dict, s...)
 #####
 
 struct NoTelemetry end
-mutable struct CacheManager{C,R,L,T}
+mutable struct CacheManager{C,T}
     map::BackedgeMap
 
     # local datastructures
     policy::C
-    remote_heap::CompactHeap{R}
-    local_heap::CompactHeap{L}
+    remote_heap::CompactHeap
+    local_heap::CompactHeap
 
     # Create a new ID for each object registered in the cache.
     idcount::Threads.Atomic{UInt64}
@@ -75,7 +75,8 @@ end
 # Telemetry Utils
 gettelemetry(manager::CacheManager) = manager.telemetry
 telemetry_enabled(::CacheManager) = true
-telemetry_enabled(::CacheManager{<:Any,<:Any,<:Any,NoTelemetry}) = false
+telemetry_enabled(::CacheManager{<:Any,NoTelemetry}) = false
+getpolicy(manager::CacheManager) = manager.policy
 
 macro telemetry(manager, expr)
     return quote
@@ -131,7 +132,7 @@ function CacheManager(
     )
 
     # Add this to the global manager list to ensure that it outlives any of its users.
-    push!(GlobalManagers, manager)
+    # push!(GlobalManagers, manager)
     return manager
 end
 
@@ -162,7 +163,7 @@ end
 ##### Object (De)Registration
 #####
 
-function unsafe_register!(manager::CacheManager, object::Object) where {T}
+function unsafe_register!(manager::CacheManager, object::Object)
     @requires alloc_lock(manager)
     block = metadata(object)
     set!(getmap(manager), block, backedge(object))
@@ -170,7 +171,7 @@ function unsafe_register!(manager::CacheManager, object::Object) where {T}
     return nothing
 end
 
-function unsafe_unregister!(manager::CacheManager, block::Block) where {T}
+function unsafe_unregister!(manager::CacheManager, block::Block)
     @requires alloc_lock(manager)
     delete!(getmap(manager), getid(block), length(block))
     delete!(manager.policy, block)
@@ -412,12 +413,6 @@ function Base.copyto!(dst::Block, src::Block, ::CacheManager; include_header = f
     else
         nthreads = getpool(dst) == Remote ? 8 : Threads.nthreads()
     end
-    # @telemetry manager telemetry_move(
-    #     gettelemetry(manager),
-    #     getid(src),
-    #     getpool(dst),
-    #     sizeof(src),
-    # )
 
     if include_header
         _memcpy!(pointer(dst), pointer(src), length(src); nthreads)

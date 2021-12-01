@@ -2,25 +2,30 @@
 ##### Wrapper Types
 #####
 
+# These functions require the type to be reconstructed
 const RECONSTRUCTING_KEYWORDS = [:readable, :writable, :release]
-const FORWARDING_KEYWORDS =
-    [:prefetch!, :softevict!, :evict!, :unsafe_free, :_unsafe_track!, :_unsafe_untrack!]
+
+# These functions require forward to all children of wrapper types
+const FORWARDING_KEYWORDS = [:prefetch!, :softevict!, :evict!, :unsafe_free]
+
+# These functions only require forwarding to a single child
 const SINGLE_FORWARDING_KEYWORDS = [:manager]
 
-const KEYWORDS =
-    vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS, SINGLE_FORWARDING_KEYWORDS)
+const KEYWORDS = vcat(
+    RECONSTRUCTING_KEYWORDS,
+    FORWARDING_KEYWORDS,
+    SINGLE_FORWARDING_KEYWORDS,
+)
 
-for keyword in vcat(RECONSTRUCTING_KEYWORDS, FORWARDING_KEYWORDS)
+for keyword in KEYWORDS
     @eval $keyword(x::AbstractArray; kw...) = nothing
-    @eval $keyword(x::CachedArray; kw...) = $keyword(Cacheable(), x; kw...)
     @eval function $keyword(x, y, z...; kw...)
         $keyword(x; kw...)
         $keyword(y, z...; kw...)
     end
-    #@eval $keyword(x, y, z...; kw...) = foreach(a -> $keyword(a; kw...), (x, y, z...))
 end
 
-children(_) = ()
+children(::Any) = ()
 children(x::Union{Tuple,AbstractArray}) = x
 
 # Helper functions for when we need to recurse using "Base.invoke"
@@ -87,7 +92,7 @@ macro wrapper(typ, fields...)
         end
     end
 
-    overloads = builder.(fns)
+    overloads = map(builder, fns)
 
     # Define "maybesuper" for this type as well.
     accessors = [:(getproperty(x, $field)) for field in fields]
@@ -106,7 +111,6 @@ macro wrapper(typ, fields...)
         $(overloads...)
         $maybesuper
         $children
-        # $_expand
     end
 end
 

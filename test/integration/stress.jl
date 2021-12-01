@@ -98,14 +98,13 @@ end
     println("Beginning Stress Test")
     @time ProgressMeter.@showprogress 1 for _i in 1:target_allocations
         epoch(manager, arrays, generator; allocate = true)
-        # @test CachedArrays.check(manager)
         CachedArrays.check(manager) || error()
     end
 
     println("Cleaning Up Stress Test")
     @time while !isempty(arrays)
         epoch(manager, arrays, generator; allocate = false)
-        @test CachedArrays.check(manager)
+        CachedArrays.check(manager) || error()
     end
 
     @show manager

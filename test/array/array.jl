@@ -57,7 +57,6 @@ end
     gctest(manager)
     @test CachedArrays.check(manager)
     GC.gc(true)
-    foreach(x -> CachedArrays.unsafe_free(manager, x), values(manager.map))
     @test CachedArrays.check(manager)
 
     # Wrap this body of code in a "let" block to ensure that GC will clean up any temporary
@@ -96,10 +95,5 @@ end
         f!(C, A, B)
         @test (@allocated f!(C, A, B)) == 0
     end
-    foreach(x -> CachedArrays.unsafe_free(manager, x), values(manager.map))
-end
-
-@testset "Testing Cleanup" begin
-    @test CachedArrays.gc_managers() == 1
 end
 

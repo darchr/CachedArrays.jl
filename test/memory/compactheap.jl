@@ -1,4 +1,148 @@
+function checkschema(heap::CachedArrays.CompactHeap, schemas)
+    @test length(heap) == length(schemas)
+    for (block, schema) in zip(heap, schemas)
+        isfree, size = schema
+        @test CachedArrays.isfree(block) == isfree
+        @test block.size == size
+    end
+end
+
 @testset "CompactHeap" begin
+    @testset "Testing Power of Two" begin
+        x = CachedArrays.poweroftwo(10)
+        for i in 1:10
+            @test CachedArrays.binsize(x, i) == (2^10) * i
+        end
+        @test CachedArrays.getbin(x, 1024) == 1
+        @test CachedArrays.getbin(x, 1025) == 2
+        @test CachedArrays.getbin(x, 2 * 1024 - 1) == 2
+        @test CachedArrays.getbin(x, 2 * 1024 - 0) == 2
+        @test CachedArrays.getbin(x, 2 * 1024 + 1) == 3
+    end
+
+    @testset "Heap Fundamentals" begin
+        allocator = CachedArrays.AlignedAllocator()
+        len = 2^12
+        minallocation = 10
+        heap = CachedArrays.CompactHeap(allocator, len; minallocation = 10)
+        M = 2^minallocation
+        @test length(CachedArrays.freelists(heap)) == div(len, M)
+
+        # Perform a min-allocation
+        # Heap layout after allocation should be
+        #
+        # +---------+-----------+-----------+-----------+
+        # |   B1    |    B2     |    B3     |    B4     |
+        # +---------+-----------+-----------+-----------+
+        # |  ptr0   |              Free                 |
+        # +---------+-----------+-----------+-----------+
+        ptr0 = CachedArrays.alloc(heap, 2^minallocation - CachedArrays.headersize())
+        schema = [(false, M), (true, 3 * M)]
+        checkschema(heap, schema)
+
+        # Expected State
+        # +---------+-----------+-----------+-----------+
+        # |   B1    |    B2     |    B3     |    B4     |
+        # +---------+-----------+-----------+-----------+
+        # |  ptr0   |         ptr1          |   Free    |
+        # +---------+-----------+-----------+-----------+
+        ptr1 = CachedArrays.alloc(heap, 2 * 2^minallocation - CachedArrays.headersize())
+        schema = [(false, M), (false, 2 * M), (true, M)]
+        checkschema(heap, schema)
+
+        @test CachedArrays.canalloc(heap, 2 * M) == false
+        @test CachedArrays.canalloc(heap, M - CachedArrays.headersize()) == true
+
+        # Expected State
+        # +---------+-----------+-----------+-----------+
+        # |   B1    |    B2     |    B3     |    B4     |
+        # +---------+-----------+-----------+-----------+
+        # |  Free   |         ptr1          |   Free    |
+        # +---------+-----------+-----------+-----------+
+        CachedArrays.free(heap, ptr0)
+        schema = [(true, M), (false, 2 * M), (true, M)]
+        checkschema(heap, schema)
+
+        # Expected State
+        # +---------+-----------+-----------+-----------+
+        # |   B1    |    B2     |    B3     |    B4     |
+        # +---------+-----------+-----------+-----------+
+        # |                   Free                      |
+        # +---------+-----------+-----------+-----------+
+        CachedArrays.free(heap, ptr1)
+        schema = [(true, 4 * M)]
+        checkschema(heap, schema)
+    end
+
+    @testset "Stress" begin
+        allocator = CachedArrays.AlignedAllocator()
+        len = 2^27
+        heap = CachedArrays.CompactHeap(allocator, len)
+        numtests = 10000
+        pointers = Set{Ptr{Nothing}}()
+        Random.seed!(123)
+
+        timer = TimerOutput()
+        num_outer_tests = 3
+        @timeit timer "Test Running" for test in Base.OneTo(num_outer_tests)
+            for _ in Base.OneTo(numtests)
+                # CHange ratios of allocations to frees.
+                if test == 1
+                    num_allocs = rand(1:20)
+                elseif test == 2
+                    num_allocs = rand(10:20)
+                else
+                    num_allocs = rand(1:10)
+                end
+
+                for _ in 1:num_allocs
+                    # Make a random allocation.
+                    sz = rand(0:len - 256)
+                    @timeit timer "Allocating" ptr = CachedArrays.alloc(heap, sz)
+
+                    # Throw an error if it doesn't pass.
+                    # That way, if it actually doesn't pass, we don't get SPAMMED in the
+                    # test window.
+                    @timeit timer "Checking 1" passed = CachedArrays.check(heap)
+                    !passed && error()
+
+                    if !isnothing(ptr)
+                        @test !in(ptr, pointers)
+                        push!(pointers, ptr)
+                    elseif isnothing(ptr)
+                        canalloc = CachedArrays.canalloc(heap, sz)
+                        @test sz == 0 || !canalloc
+                        canalloc || break
+                    end
+                end
+
+                if test == 1
+                    num_frees = rand(1:10)
+                elseif test == 2
+                    num_frees = rand(10:20)
+                else
+                    num_frees = rand(1:11)
+                end
+
+                for _ in 1:num_frees
+                    isempty(pointers) && break
+                    ptr = rand(pointers)
+                    delete!(pointers, ptr)
+                    @timeit timer "Freeing" CachedArrays.free(heap, ptr)
+                    @timeit timer "Checking 2" passed = CachedArrays.check(heap)
+                    !passed && error()
+                end
+            end
+        end
+        printstyled(stdout, "Timer Results for Compact Heap\n"; color = :cyan, bold = true)
+        println(stdout, timer)
+
+        for ptr in pointers
+            CachedArrays.free(heap, ptr)
+            @test CachedArrays.check(heap)
+        end
+    end
+
     @testset "Eviction" begin
         # Make a small-granularity heap so we can wrap our heads around what's going on.
         # This heap will only have 4 blocks, each of size 4096.
@@ -68,72 +212,6 @@
 
         ptrD = CachedArrays.alloc(heap, 2 * 4096 + 10)
         @test ptrD == base + 4096 + CachedArrays.headersize()
-    end
-
-    @testset "Scoping" begin
-        #len = 100_000_000
-        allocator = CachedArrays.AlignedAllocator()
-        len = 2^27
-        heap = CachedArrays.CompactHeap(allocator, len)
-        numtests = 10000
-        pointers = Set{Ptr{Nothing}}()
-        Random.seed!(123)
-
-        timer = TimerOutput()
-
-        @timeit timer "Test Running" for test in 1:3
-            for _ in 1:numtests
-                # CHange ratios of allocations to frees.
-                if test == 1
-                    num_allocs = rand(1:20)
-                elseif test == 2
-                    num_allocs = rand(10:20)
-                else
-                    num_allocs = rand(1:10)
-                end
-
-                for _ in 1:num_allocs
-                    # Make a random allocation.
-                    sz = rand(0:len - 256)
-                    @timeit timer "Allocating" ptr = CachedArrays.alloc(heap, sz)
-
-                    # Throw an error if it doesn't pass.
-                    # That way, if it actually doesn't pass, we don't get SPAMMED in the
-                    # test window.
-                    @timeit timer "Checking 1" passed = CachedArrays.check(heap)
-                    !passed && error()
-
-                    if !isnothing(ptr)
-                        @test !in(ptr, pointers)
-                        push!(pointers, ptr)
-                    end
-                end
-
-                if test == 1
-                    num_frees = rand(1:10)
-                elseif test == 2
-                    num_frees = rand(10:20)
-                else
-                    num_frees = rand(1:11)
-                end
-
-                for _ in 1:num_frees
-                    isempty(pointers) && break
-                    ptr = rand(pointers)
-                    delete!(pointers, ptr)
-                    @timeit timer "Freeing" CachedArrays.free(heap, ptr)
-                    @timeit timer "Checking 2" passed = CachedArrays.check(heap)
-                    !passed && error()
-                end
-            end
-        end
-        printstyled(stdout, "Timer Results for Compact Heap\n"; color = :cyan, bold = true)
-        println(stdout, timer)
-
-        for ptr in pointers
-            CachedArrays.free(heap, ptr)
-            @test CachedArrays.check(heap)
-        end
     end
 
     @testset "Defragmentation" begin
@@ -424,4 +502,162 @@ end
     CachedArrays.evictfrom!(heap, B, 2 * 4096; cb = cb)
     @test CachedArrays.check(heap)
     @test length(heap) == 1
+end
+
+# Lots of corner cases live in eviction.
+# Particularly when early aborts are triggered.
+# Here, we try to test the corner cases.
+@testset "Testing More Eviction Corner Cases" begin
+    # Scenarios to try.
+    # 1. Block right before the eviction is freed during callback.
+    # 2. Block right after current eviction frontier is freed during callback.
+    # 3. Abort called during forward eviction frontier expansion. Block is NOT orphaned.
+    # 4. Abort called during forward eviction frontier expansion. Block IS orphaned.
+    # 5. Abort called during backward eviction frontier expansion. Block is NOT orphaned.
+    # 6. Abort called during backward eviction frontier expansion. Block IS orphaned.
+
+    #####
+    ##### Case 1.
+    #####
+
+    let
+        allocator = CachedArrays.AlignedAllocator()
+        heap = CachedArrays.CompactHeap(allocator, 6 * 4096; minallocation = 12)
+
+        A = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 10))
+        B = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 0))
+        C = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 20))
+
+        @test CachedArrays.getid(A) == 10
+        @test CachedArrays.getid(B) == 0
+        @test CachedArrays.getid(C) == 20
+
+        # Callback function will free "A".
+        # This will occur while "B" is being evicted.
+        cb = function(block)
+            if CachedArrays.getid(block) == CachedArrays.getid(C)
+                CachedArrays.free(heap, CachedArrays.datapointer(A))
+            end
+        end
+
+        CachedArrays.evictfrom!(heap, B, 2 * 4096; cb = cb)
+        @test CachedArrays.check(heap)
+        @test length(heap) == 1
+    end
+
+    #####
+    ##### Case 2.
+    #####
+
+    let
+        allocator = CachedArrays.AlignedAllocator()
+        heap = CachedArrays.CompactHeap(allocator, 6 * 4096; minallocation = 12)
+
+        A = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 10))
+        B = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 0))
+        C = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 20))
+
+        @test CachedArrays.getid(A) == 10
+        @test CachedArrays.getid(B) == 0
+        @test CachedArrays.getid(C) == 20
+
+        # Callback function will free "C".
+        # This will occur while "B" is being evicted.
+        cb = function(block)
+            if CachedArrays.getid(block) == CachedArrays.getid(B)
+                CachedArrays.free(heap, CachedArrays.datapointer(C))
+            end
+        end
+
+        CachedArrays.evictfrom!(heap, B, 2 * 4096; cb = cb)
+        @test CachedArrays.check(heap)
+        @test length(heap) == 2
+        CachedArrays.free(heap, CachedArrays.datapointer(A))
+        @test length(heap) == 1
+    end
+
+    #####
+    ##### Case 3.
+    #####
+
+    let
+        allocator = CachedArrays.AlignedAllocator()
+        heap = CachedArrays.CompactHeap(allocator, 6 * 4096; minallocation = 12)
+
+        A = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 10))
+        B = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 0))
+        C = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 20))
+        D = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 30))
+
+        @test CachedArrays.getid(A) == 10
+        @test CachedArrays.getid(B) == 0
+        @test CachedArrays.getid(C) == 20
+        @test CachedArrays.getid(D) == 30
+
+        # Callback function will free "C".
+        # This will occur while "B" is being evicted.
+        cb = function(block)
+            return CachedArrays.getid(block) == CachedArrays.getid(C)
+        end
+
+        # Evict from B, abort at C.
+        # C is still taken and was not freed during the eviction process.
+        # Make sure C is still in the heap.
+        CachedArrays.evictfrom!(heap, B, 2 * 4096; cb = cb)
+        @test CachedArrays.isfree(A) == false
+        @test CachedArrays.isfree(B) == true
+        @test CachedArrays.isfree(C) == false
+        @test CachedArrays.isfree(D) == false
+        @test CachedArrays.check(heap)
+
+        @test length(heap) == 5
+    end
+
+    #####
+    ##### Case 4.
+    #####
+
+    let
+        allocator = CachedArrays.AlignedAllocator()
+        heap = CachedArrays.CompactHeap(allocator, 6 * 4096; minallocation = 12)
+
+        A = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 10))
+        B = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 0))
+        C = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 20))
+        D = CachedArrays.unsafe_block(CachedArrays.alloc(heap, 256, 30))
+
+        @test CachedArrays.getid(A) == 10
+        @test CachedArrays.getid(B) == 0
+        @test CachedArrays.getid(C) == 20
+        @test CachedArrays.getid(D) == 30
+
+        # Callback function will free "C".
+        # This will occur while "B" is being evicted.
+        cb = function(block)
+            if CachedArrays.getid(block) == 20
+                CachedArrays.free(heap, CachedArrays.datapointer(C))
+                @test C.orphaned == true
+                return true
+            end
+            return false
+        end
+
+        # Evict from B, abort at C.
+        # C is still freed while "B" is being evicted.
+        # We then abort when trying to evict C.
+        # Make sure that C gets reclaimed during the cleanup process.
+        CachedArrays.evictfrom!(heap, B, 2 * 4096; cb = cb)
+        @test CachedArrays.isfree(A) == false
+        @test CachedArrays.isfree(B) == true
+        # B was merged with C
+        @test B.size == 2 * 4096
+        @test CachedArrays.isfree(D) == false
+        @test CachedArrays.check(heap)
+
+        @test length(heap) == 4 # A, B, D, tail
+    end
+
+    #####
+    ##### Case 6
+    #####
 end

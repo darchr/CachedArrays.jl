@@ -68,6 +68,10 @@
         @test islocked(a) == true
         @test islocked(b) == true
         @test islocked(c) == true
+
+        unlock(a)
+        unlock(b)
+        unlock(c)
     end
 
     @testset "Testing @checknothing" begin

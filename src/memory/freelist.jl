@@ -2,21 +2,35 @@
 ##### Freelists
 #####
 
+abstract type AbstractFreelist{T} end
+
 # Parameterize the freelist for testing purposts.
 # Expected api for T:
 #      .next
 #      .previous
 #      address
 #      isnull
-mutable struct Freelist{T}
+mutable struct Freelist{T} <: AbstractFreelist{T}
     base::T
 end
-
 Freelist{T}() where {T} = Freelist(T())
+getbase(x::Freelist) = x.base
+setbase!(x::Freelist{T}, v::T) where {T} = (x.base = v)
 
-function Base.length(x::Freelist)
+# Raw pointer based list
+struct FreelistPtr{T} <: AbstractFreelist{T}
+    ptr::Ptr{T}
+end
+getbase(x::FreelistPtr) = unsafe_load(x.ptr)
+setbase!(x::FreelistPtr{T}, v::T) where {T} = unsafe_store!(x.ptr, v)
+
+#####
+##### Implementation
+#####
+
+function Base.length(x::AbstractFreelist)
     count = 0
-    item = x.base
+    item = getbase(x)
     while !isnull(item)
         count += 1
         item = item.next
@@ -25,32 +39,32 @@ function Base.length(x::Freelist)
     return count
 end
 
-Base.isempty(x::Freelist) = isnull(x.base)
+Base.isempty(x::AbstractFreelist) = isnull(getbase(x))
 
-function Base.pop!(x::Freelist{T}) where {T}
+function Base.pop!(x::AbstractFreelist{T}) where {T}
     # Pull out the base
-    item = x.base
+    item = getbase(x)
 
     # Set the base block to the next block
     # If this hasn't emptied the freelist, null out the previous field
-    x.base = item.next
+    setbase!(x, item.next)
     if !isempty(x)
-        x.base.previous = T()
+        getbase(x).previous = T()
     end
     item.next = T()
     return item
 end
 
-function Base.push!(x::Freelist{T}, item::T) where {T}
+function Base.push!(x::AbstractFreelist{T}, item::T) where {T}
     if isempty(x)
         item.next = T()
     else
-        @check isnull(x.base.previous)
-        x.base.previous = item
-        item.next = x.base
+        @check isnull(getbase(x).previous)
+        getbase(x).previous = item
+        item.next = getbase(x)
     end
     item.previous = T()
-    x.base = item
+    setbase!(x, item)
     return x
 end
 
@@ -69,17 +83,15 @@ function swap!(a::T, b::T) where {T}
     return nothing
 end
 
-function remove!(x::Freelist{T}, item::T) where {T}
+function remove!(x::AbstractFreelist{T}, item::T) where {T}
     # Update the linked-list.
     if isnull(item.previous)
-        x.base = item.next
+        setbase!(x, item.next)
     else
         item.previous.next = item.next
     end
 
     if !isnull(item.next)
-        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Freelist: Next: $(pointer(item) + 8)\n")
-        # VERBOSE && ccall(:jl_safe_printf, Cvoid, (Cstring,), "    Freelist: Next-Previous: $(pointer(item.next) + 16)\n")
         item.next.previous = item.previous
     end
     item.next = item.previous = T()
@@ -88,12 +100,12 @@ end
 
 # Sort the freelist by some parameter
 # uses a simple bubble sort - so probably not that fast.
-function Base.sort!(x::Freelist; lt = isless)
+function Base.sort!(x::AbstractFreelist; lt = isless)
     isempty(x) && return nothing
 
     while true
         swapped = false
-        current = x.base
+        current = getbase(x)
 
         next = current.next
         while !isnull(next)
@@ -102,7 +114,7 @@ function Base.sort!(x::Freelist; lt = isless)
                 swap!(current, next)
                 # Update the base element if needed.
                 # Handling of `null` will be dealt with in `swap!`.
-                current == x.base && (x.base = next)
+                current == getbase(x) && (setbase!(x, next))
                 swapped = true
             else
                 current = next
@@ -116,7 +128,7 @@ function Base.sort!(x::Freelist; lt = isless)
     return nothing
 end
 
-function Base.iterate(x::Freelist, item = x.base)
+function Base.iterate(x::AbstractFreelist, item = getbase(x))
     isnull(item) && return nothing
     return (item, item.next)
 end
