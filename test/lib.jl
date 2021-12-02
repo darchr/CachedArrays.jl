@@ -13,32 +13,18 @@ end
 # This is a little brittle and requires a bit of care for the following reasons:
 #
 # 1. Gensyms need to be replaced in a deterministic manner. See `alias_gensyms` below.
-# 2. We need to replace instances of `CachedArrays.symbol` in the expected expression with
-#    a `GlobalRef` in order to match the results from `macroexpand`. This is handled by
-#    the `globalref` function below.
 macro annotatetest(expr)
     return :(
-        MacroTools.prettify(
-            macroexpand(TestModule, $(QuoteNode(expr)), recursive = true),
-            alias = false,
-        ) |> alias_gensyms
+        alias_gensyms(MacroTools.prettify(
+            macroexpand(TestModule, $(QuoteNode(expr)); recursive = true); alias = false
+        ))
     )
 end
 
 macro expected(expr)
+    expanded = QuoteNode(macroexpand(TestModule, expr; recursive = true))
     return quote
-        alias_gensyms(globalref(MacroTools.prettify($(QuoteNode(expr)), alias = false)))
-    end
-end
-
-# Replace instances of "CachedArrays.x" with a GlobalRef to match the result of
-# macroexpansion.
-function globalref(expr)
-    return MacroTools.postwalk(expr) do ex
-        if MacroTools.@capture(ex, CachedArrays.fn_)
-            return :($(GlobalRef(CachedArrays, fn)))
-        end
-        return ex
+        alias_gensyms(MacroTools.prettify($expanded; alias = false))
     end
 end
 
@@ -140,40 +126,13 @@ end
         # Test "maybe_process_call" works on keywords and ignores nonkeywords.
         for keyword in CachedArrays.KEYWORDS
             sym = Symbol("__$(keyword)__")
-            @test CachedArrays.maybe_process_call(sym) == Symbol(keyword)
+            @test CachedArrays.maybe_process_call(sym) == :(CachedArrays.$(Symbol(keyword)))
         end
 
         @test CachedArrays.maybe_process_call(:__invoke__) == :__invoke__
         @test CachedArrays.maybe_process_call(:__recurse__) == :__recurse__
         @test CachedArrays.maybe_process_call(:__notakeyword__) == :__notakeyword__
         @test CachedArrays.maybe_process_call(:release) == :release
-
-        # Test "argname"
-        expr = quote
-            function (test::Module.Thing)(
-                a,
-                b::Integer,
-                c::Args...;
-                g = AnotherModule.somefunction(),
-                kw...,
-            ) where {Args}
-                return nothing
-            end
-        end
-
-        def = MacroTools.splitdef(expr)
-        @test CachedArrays.argname(def[:name]) == :test
-        @test CachedArrays.argname.(def[:args]) == [:a, :b, :c]
-        @test CachedArrays.argname.(def[:kwargs]) == [:g, :kw]
-
-        def, oldargs = CachedArrays.prepare_function(expr)
-        @test oldargs == [:a, :b, :c, :test, :g, :kw]
-
-        isescaped(expr) = (isa(expr, Expr) && expr.head == :escape)
-        @test isescaped(def[:name])
-        @test all(isescaped, def[:args])
-        @test all(isescaped, def[:whereparams])
-        @test all(isescaped, def[:kwargs])
 
         #####
         ##### Test Cases
@@ -184,8 +143,7 @@ end
 
         ### Test 1
         fn = @annotatetest CachedArrays.@annotate function Mod.fn(
-            x::MaybeTranspose{<:UnreadableCachedArray},
-            desc,
+            x::MaybeTranspose{<:UnreadableCachedArray}, desc
         )
             return __recurse__(__readable__(x), desc)
         end
@@ -196,8 +154,7 @@ end
 
         ### Test 2
         fn = @annotatetest CachedArrays.@annotate function Mod.another_fn(
-            f,
-            data::CachedArray,
+            f, data::CachedArray
         )
             return __invoke__(f, __writable__(data))
         end
@@ -217,18 +174,37 @@ end
 
         ### Test 3
         fn = @annotatetest CachedArrays.@annotate function (dot::SomeModule.Callable)(
-            x::UnreadableCachedArray,
-            ys::ReadableCachedArray;
-            kw...,
+            x::UnreadableCachedArray, ys::ReadableCachedArray; kw...
         )
             return dot(__readable__(x), ys; kw...)
         end
         ex = @expected function (dot::SomeModule.Callable)(
-            x::UnreadableCachedArray,
-            ys::ReadableCachedArray;
-            kw...,
+            x::UnreadableCachedArray, ys::ReadableCachedArray; kw...
         )
             return dot(CachedArrays.readable(x), ys; kw...)
+        end
+        @test fn == ex
+
+        ### Test 4
+        # Ensure that functions scoped outside the body of the macro are called correctly.
+        fn = @annotatetest CachedArrays.@annotate function (dot::SomeModule.Callable)(
+            x::UnreadableCachedArray
+        )
+            y = CachedArrays.@noescape __manager__(x) __recurse__(__readable__(x))
+            CachedArrays.onobjects(dot) do o
+                somefunction!(o)
+            end
+            return __release__(y)
+        end
+
+        ex = @expected function (dot::SomeModule.Callable)(x::UnreadableCachedArray;)
+            y = CachedArrays.@noescape CachedArrays.manager(x) (dot::SomeModule.Callable)(
+                CachedArrays.readable(x)
+            )
+            CachedArrays.onobjects(dot) do o
+                somefunction!(o)
+            end
+            return CachedArrays.release(y)
         end
         @test fn == ex
 

@@ -132,7 +132,7 @@ function CacheManager(
     )
 
     # Add this to the global manager list to ensure that it outlives any of its users.
-    # push!(GlobalManagers, manager)
+    push!(GlobalManagers, manager)
     return manager
 end
 

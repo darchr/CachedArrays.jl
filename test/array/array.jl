@@ -97,3 +97,7 @@ end
     end
 end
 
+@testset "Testing Cleanup" begin
+    @test CachedArrays.gc_managers() == 1
+end
+

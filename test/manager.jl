@@ -144,3 +144,15 @@ end
     @test CachedArrays.check(manager)
 end
 
+@testset "Testing Manager Cleanup 1" begin
+    GC.gc(true)
+    @test length(CachedArrays.GlobalManagers) == 1
+    manager = only(CachedArrays.GlobalManagers)
+    @test CachedArrays.cangc(manager)
+    @test CachedArrays.check(manager)
+end
+
+@testset "Testing Manager Cleanup 2" begin
+    v = CachedArrays.gc_managers()
+    @test v == 1
+end

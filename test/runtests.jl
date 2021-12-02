@@ -31,8 +31,8 @@ include("memcpy.jl")
 
 include("manager.jl")
 include("array/array.jl")
-# include("lib.jl")
-# include("annotation.jl")
+include("lib.jl")
+include("annotation.jl")
 
 include("integration/corner.jl")
 include("integration/stress.jl")
