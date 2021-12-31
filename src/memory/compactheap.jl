@@ -454,7 +454,6 @@ function evictfrom!(heap::CompactHeap, block::Block, sz; cb = donothing)
 
     last = block
     current = block
-
     aborted = false
 
     # NOTE ON ABORTING.

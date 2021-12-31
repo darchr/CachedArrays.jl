@@ -267,9 +267,8 @@ function noescape_impl(manager, params, fn)
         args = map(esc, args)
         kw = map(esc, kw)
         return :(noescape($manager, $(annotations...), $(args...); $(kw...)))
-
-        # More complicated case.
     else
+        # More complicated case.
         return find_invoke(manager, annotations, fn)
     end
 end
