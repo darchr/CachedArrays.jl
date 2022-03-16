@@ -163,10 +163,6 @@ function Base.pop!(heap::CompactHeap, bin)
     if isset(heap.status, bin)
         return @inbounds(popfreelist!(heap, bin))
     end
-    # list = @inbounds getfreelist(heap, bin)
-    # if !isempty(list)
-    #     return @inbounds(popfreelist!(heap, list, bin))
-    # end
 
     # Okay, we don't have a block.
     # We need to get the next highest available block and split it.

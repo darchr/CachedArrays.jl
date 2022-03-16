@@ -151,6 +151,71 @@ function Base.reshape(x::CachedArray{T,M,S}, dims::NTuple{N,Int}) where {T,N,M,S
     return CachedArray{T,N}(object(x), dims, S())
 end
 
+######
+###### ArrayInterface
+######
+
+# Hack to deal with all the `ArrayInterface` stuff.
+# TODO: Implement the `ArrayInterface` correctly.
+#ArrayInterface.parent_type(::Type{<:CachedArray{T,N}}) where {T,N} = Array{T,N}
+#ArrayInterface.strides(A::CachedArray) = Base.strides(A)
+
+ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N} = ntuple(Returns(ArrayInterface.True()), Val(N))
+
+# # Traits
+# ArrayInterface.can_change_size(::Type{<:CachedArray}) = false
+# ArrayInterface.can_setindex(::Type{<:WritableCachedArray}) = true
+# ArrayInterface.contiguous_axis(::Type{<:CachedArray{T,N}}) where {T,N} = ArrayInterface.One()
+# ArrayInterface.size(A::CachedArray) = size(A)
+# ArrayInterface.strides(A) = strides(A)
+# ArrayInterface.defines_strides(::Type{<:CachedArray}) = true
+# ArrayInterface.fast_scalar_indexing(::Type{<:CachedArray}) = true
+# ArrayInterface.has_parent(::Type{<:CachedArray}) = false
+# ArrayInterface.is_column_major(::Type{<:CachedArray}) = true
+
+function test_array_interface(a, b)
+    # Type based functions
+    type_fns = [
+        ArrayInterface.can_change_size,
+        ArrayInterface.can_setindex,
+        ArrayInterface.contiguous_axis,
+        ArrayInterface.contiguous_axis_indicator,
+        ArrayInterface.contiguous_batch_size,
+        ArrayInterface.defines_strides,
+        ArrayInterface.device,
+        ArrayInterface.dimnames,
+        ArrayInterface.fast_matrix_colors,
+        ArrayInterface.fast_scalar_indexing,
+        ArrayInterface.has_dimnames,
+        ArrayInterface.has_parent,
+        ArrayInterface.is_column_major,
+        ArrayInterface.is_lazy_conjugate,
+        ArrayInterface.ismutable,
+        ArrayInterface.isstructured,
+        ArrayInterface.is_splat_index,
+        ArrayInterface.known_length,
+        ArrayInterface.known_offsets,
+        ArrayInterface.known_size,
+        ArrayInterface.known_step,
+        ArrayInterface.known_strides,
+        ArrayInterface.ndims_index,
+        ArrayInterface.axes,
+        #ArrayInterface.axes_types,
+        ArrayInterface.dense_dims,
+        ArrayInterface.indices,
+        ArrayInterface.offset1,
+        ArrayInterface.offsets,
+        #ArrayInterface.parent_type,
+        ArrayInterface.size,
+        ArrayInterface.strides,
+    ]
+
+    for fn in type_fns
+        @show fn
+        @assert fn(a) == fn(b)
+    end
+end
+
 #####
 ##### Speedup functions
 #####

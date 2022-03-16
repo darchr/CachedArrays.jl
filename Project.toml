@@ -23,7 +23,7 @@ SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
 [compat]
-julia = "1"
+julia = "1.7"
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
