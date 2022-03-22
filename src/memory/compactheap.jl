@@ -544,7 +544,7 @@ function materialize_os_pages!(heap::CompactHeap)
     #
     # Take steps of 4096, which is the smallest possible page size.
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Polyester.@batch per = core for i = 1:4096:sizeof(heap)
+    Polyester.@batch per = thread for i = 1:4096:sizeof(heap)
         unsafe_store!(ptr, one(UInt8), i)
     end
     return nothing
@@ -553,7 +553,7 @@ end
 function touchheap(heap::CompactHeap)
     v = zeros(UInt8, Threads.nthreads())
     ptr = convert(Ptr{UInt8}, datapointer(baseblock(heap)))
-    Polyester.@batch per = core for i = 1:64:sizeof(heap)
+    Polyester.@batch per = thread for i = 1:64:sizeof(heap)
         v[Threads.threadid()] += unsafe_load(ptr, i)
     end
     return sum(v)
