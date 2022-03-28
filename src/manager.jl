@@ -345,11 +345,6 @@ function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedg
     return nothing
 end
 
-# else
-#     free(manager::CacheManager, ptr::Ptr) = push!(manager.freebuffer, unsafe_block(ptr))
-#     unsafe_free(::Object) = nothing
-# end
-
 #####
 ##### Set primary
 #####

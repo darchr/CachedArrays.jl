@@ -4,10 +4,11 @@ module CachedArrays
 ##### Exports
 #####
 
-export CachedArray,
-    ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
+export CachedArray, ReadableCachedArray, UnreadableCachedArray, WritableCachedArray, UnwritableCachedArray
 export @annotate, tocached
 export onobjects, @blockobjects, findobjects, @noescape
+
+export prefetch!, evict!, softevict!
 
 # state transitions
 export readable, writable, release
@@ -30,6 +31,7 @@ import Random
 # directly invoking "ConstructablesBase'.
 # Of course, that's what's ultimately happening, but this is just cleaner.
 import ArrayInterface
+import ChainRulesCore
 import ConstructionBase: ConstructionBase, constructorof
 import DataStructures
 import JSON

@@ -127,18 +127,18 @@ macro annotate(fn)
     return annotate_impl(fn)
 end
 
-function maybe_process_call(sym::Symbol)
-    symstring = String(sym)
-    # Our special keywords begin and end with "__"
-    if startswith(symstring, "__") && endswith(symstring, "__")
-        # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
-        substr = Symbol(symstring[3:(end - 2)])
-        if in(substr, KEYWORDS)
-            return :(CachedArrays.$substr)
-        end
-    end
-    return sym
-end
+# function maybe_process_call(sym::Symbol)
+#     symstring = String(sym)
+#     # Our special keywords begin and end with "__"
+#     if startswith(symstring, "__") && endswith(symstring, "__")
+#         # Grab the chunk sandwiched between the "__" and see if it's a registered keyword.
+#         substr = Symbol(symstring[3:(end - 2)])
+#         if in(substr, KEYWORDS)
+#             return :(CachedArrays.$substr)
+#         end
+#     end
+#     return sym
+# end
 
 function annotate_impl(fn)
     # Get the split version of the function.
@@ -181,12 +181,8 @@ function annotate_impl(fn)
         end
 
         # Deal with magic keywords
-        if isa(x, Symbol)
-            if x == :__recurse__
-                return def[:name]
-            else
-                return maybe_process_call(x)
-            end
+        if isa(x, Symbol) && x == :__recurse__
+            return def[:name]
         end
 
         # Default - no modification.

@@ -160,7 +160,9 @@ end
 #ArrayInterface.parent_type(::Type{<:CachedArray{T,N}}) where {T,N} = Array{T,N}
 #ArrayInterface.strides(A::CachedArray) = Base.strides(A)
 
-ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N} = ntuple(Returns(ArrayInterface.True()), Val(N))
+function ArrayInterface.dense_dims(::Type{<:CachedArray{T,N}}) where {T,N}
+    return ntuple(Returns(ArrayInterface.True()), Val(N))
+end
 
 # # Traits
 # ArrayInterface.can_change_size(::Type{<:CachedArray}) = false
@@ -256,7 +258,6 @@ end
 #####
 
 const __fnmap = [:NotBusy => :release, :ReadOnly => :readable, :ReadWrite => :writable]
-
 const __updates = Dict(
     # Implications of making an array notbusy.
     # 1. TODO:
@@ -277,7 +278,9 @@ for (typ, fn) in __fnmap
         if !isnull(unsafe_pointer(x.object))
             # Optional Telemetry
             @telemetry manager(x) begin
-                telemetry_change(gettelemetry(manager(x)), getid(metadata(x)), $(QuoteNode(typ)))
+                telemetry_change(
+                    gettelemetry(manager(x)), getid(metadata(x)), $(QuoteNode(typ))
+                )
             end
             # unpack any potential policy updates.
             $(__updates...)
@@ -292,5 +295,18 @@ for (typ, fn) in __fnmap
     ) where {T,N,S,M}
         return $fn(x)
     end
+
+    # ChainRules
+end
+
+# ChainRules
+function ChainRulesCore.rrule(::typeof(readable), x::CachedArray)
+    return (readable(x), dy -> (ChainRulesCore.NoTangent(), dy))
+end
+function ChainRulesCore.rrule(::typeof(writable), x::CachedArray)
+    return (writable(x), dy -> (ChainRulesCore.NoTangent(), dy))
+end
+function ChainRulesCore.rrule(::typeof(release), x::CachedArray)
+    return (release(x), dy -> (ChainRulesCore.NoTangent(), dy))
 end
 

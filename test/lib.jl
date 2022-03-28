@@ -123,16 +123,16 @@ end
     end
 
     @testset "Testing @annotate" begin
-        # Test "maybe_process_call" works on keywords and ignores nonkeywords.
-        for keyword in CachedArrays.KEYWORDS
-            sym = Symbol("__$(keyword)__")
-            @test CachedArrays.maybe_process_call(sym) == :(CachedArrays.$(Symbol(keyword)))
-        end
+        # # Test "maybe_process_call" works on keywords and ignores nonkeywords.
+        # for keyword in CachedArrays.KEYWORDS
+        #     sym = Symbol("__$(keyword)__")
+        #     @test CachedArrays.maybe_process_call(sym) == :(CachedArrays.$(Symbol(keyword)))
+        # end
 
-        @test CachedArrays.maybe_process_call(:__invoke__) == :__invoke__
-        @test CachedArrays.maybe_process_call(:__recurse__) == :__recurse__
-        @test CachedArrays.maybe_process_call(:__notakeyword__) == :__notakeyword__
-        @test CachedArrays.maybe_process_call(:release) == :release
+        # @test CachedArrays.maybe_process_call(:__invoke__) == :__invoke__
+        # @test CachedArrays.maybe_process_call(:__recurse__) == :__recurse__
+        # @test CachedArrays.maybe_process_call(:__notakeyword__) == :__notakeyword__
+        # @test CachedArrays.maybe_process_call(:release) == :release
 
         #####
         ##### Test Cases
@@ -145,10 +145,10 @@ end
         fn = @annotatetest CachedArrays.@annotate function Mod.fn(
             x::MaybeTranspose{<:UnreadableCachedArray}, desc
         )
-            return __recurse__(__readable__(x), desc)
+            return __recurse__(readable(x), desc)
         end
         ex = @expected function Mod.fn(x::MaybeTranspose{<:UnreadableCachedArray}, desc;)
-            return Mod.fn(CachedArrays.readable(x), desc)
+            return Mod.fn(readable(x), desc)
         end
         @test fn == ex
 
@@ -156,7 +156,7 @@ end
         fn = @annotatetest CachedArrays.@annotate function Mod.another_fn(
             f, data::CachedArray
         )
-            return __invoke__(f, __writable__(data))
+            return __invoke__(f, writable(data))
         end
 
         # Test replacement order
@@ -176,12 +176,12 @@ end
         fn = @annotatetest CachedArrays.@annotate function (dot::SomeModule.Callable)(
             x::UnreadableCachedArray, ys::ReadableCachedArray; kw...
         )
-            return dot(__readable__(x), ys; kw...)
+            return dot(readable(x), ys; kw...)
         end
         ex = @expected function (dot::SomeModule.Callable)(
             x::UnreadableCachedArray, ys::ReadableCachedArray; kw...
         )
-            return dot(CachedArrays.readable(x), ys; kw...)
+            return dot(readable(x), ys; kw...)
         end
         @test fn == ex
 
@@ -190,21 +190,21 @@ end
         fn = @annotatetest CachedArrays.@annotate function (dot::SomeModule.Callable)(
             x::UnreadableCachedArray
         )
-            y = CachedArrays.@noescape __manager__(x) __recurse__(__readable__(x))
+            y = CachedArrays.@noescape manager(x) __recurse__(readable(x))
             CachedArrays.onobjects(dot) do o
                 somefunction!(o)
             end
-            return __release__(y)
+            return release(y)
         end
 
         ex = @expected function (dot::SomeModule.Callable)(x::UnreadableCachedArray;)
-            y = CachedArrays.@noescape CachedArrays.manager(x) (dot::SomeModule.Callable)(
-                CachedArrays.readable(x)
+            y = CachedArrays.@noescape manager(x) (dot::SomeModule.Callable)(
+                readable(x)
             )
             CachedArrays.onobjects(dot) do o
                 somefunction!(o)
             end
-            return CachedArrays.release(y)
+            return release(y)
         end
         @test fn == ex
 
