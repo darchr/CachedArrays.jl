@@ -129,11 +129,7 @@ end
 
 Sort all of the freelists in `heap` in order of increasing address.
 """
-function sortfreelists!(heap)
-    for freelist in freelists(heap)
-        sort!(freelist)
-    end
-end
+sortfreelists!(heap) = foreach(sort!, freelists(heap))
 
 function Base.push!(heap::CompactHeap, block::Block)
     bin = getbin(heap, block)
