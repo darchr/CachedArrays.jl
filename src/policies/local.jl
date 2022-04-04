@@ -1,5 +1,4 @@
-# S
-#imple policy that always allocates to the local pool.
+# Simple policy that always allocates to the local pool.
 struct LocalTracker
     threshold::Float64
 end
@@ -11,10 +10,14 @@ Base.delete!(::LocalTracker, block) = nothing
 update(::LocalTracker, _) = nothing
 softevict!(::LocalTracker, manager, block) = nothing
 prefetch!(::Block, ::LocalTracker, manager; kw...) = nothing
-evict!(A, ::LocalTracker, manager) = nothing
+evict!(::Any, ::LocalTracker, manager) = nothing
 
 # Only allocate from local pool.
-function policy_new_alloc(t::LocalTracker, manager, bytes, id, _::AllocationPriority)
+function policy_new_alloc(t::LocalTracker, manager, bytes, id, priority::AllocationPriority)
+    if priority == ForceRemote
+        @return_if_exists unsafe_alloc_direct(RemotePool(), manager, bytes, id)
+    end
+
     # See if it's time to GC.
     allocated, total = getstate(getheap(manager, LocalPool()))
     if allocated / total > t.threshold

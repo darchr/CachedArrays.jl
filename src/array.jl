@@ -68,7 +68,7 @@ CachedArray(x::Array{T,N}, manager; kw...) where {T,N} = CachedArray{T,N}(x, man
 function CachedArray{T,N}(
     x::Array{T,N}, manager; status = ReadWrite(), priority = PreferLocal
 ) where {T,N}
-    object = alloc(manager, sizeof(x))
+    object = alloc(manager, sizeof(x), priority)
     unsafe_copyto!(Ptr{T}(pointer(object)), pointer(x), length(x))
     return CachedArray{T,N}(object, size(x), status)
 end
