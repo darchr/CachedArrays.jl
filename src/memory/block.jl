@@ -25,7 +25,6 @@ struct PoolType{T} end
 #       bit 5: queued bit: 1 if queued for freeing, 0 otherwise
 #       bit 6: orphaned bit: 1 is freed while evicted.
 #
-#
 #    Size can be obtained with `block.size`.
 #    The free state is obtained with `block.free`.
 #    All of the lower 6 bits are obtained with `block.bitmasks`.
