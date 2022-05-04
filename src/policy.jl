@@ -7,7 +7,7 @@
 # the DataStructures.jl implementation.
 
 # Type parameter: number of bins
-mutable struct OptaneTracker{N}
+mutable struct OptaneTracker{N,AllowsPrefetch,AllowsUnlinked,AllowsNoescape,AllowsCleanup}
     count::Int
 
     # The minimum size of each bin.
@@ -21,17 +21,63 @@ mutable struct OptaneTracker{N}
     movement_enabled::Bool
 end
 
-function OptaneTracker(bins::NTuple{N,Int}) where {N}
+function default_optane_kw()
+    return DataStructures.OrderedDict{Symbol,Any}(
+        :AllowsPrefetch => :(<:Any),
+        :AllowsUnlinked => :(<:Any),
+        :AllowsNoescape => :(<:Any),
+        :AllowsCleanup => :(<:Any),
+    )
+end
+
+macro OptaneTracker(args...)
+    if length(args) >= 1 && (isa(args[1], Integer) || isa(args[1], Symbol))
+        N = esc(args[1])
+        args = args[2:end]
+    else
+        N = :(<:Any)
+    end
+
+    # Unpack keyword arguments
+    kw = default_optane_kw()
+    kw_type_map = Dict(k => Bool for k in keys(kw))
+    for i in eachindex(args)
+        arg = args[i]
+        if arg.head != :(=)
+            error("Expected keyword arguments to be in the form `a=b`!")
+        end
+
+        # Match implemented keywords
+        name = arg.args[1]
+        value = arg.args[2]
+        expected_type = get(kw_type_map, name, nothing)
+        expected_type === nothing && error("Unknown keyword argument $(name)!")
+        if !isa(value, expected_type)
+            msg = """
+            Expected keyword argument $name to have type $expected_type.
+            Instead, it has type $(typeof(value))!
+            """
+            error(msg)
+        end
+        kw[name] = value
+    end
+    kv = collect(values(kw))
+    return :(OptaneTracker{$N,$(kv...)})
+end
+
+function OptaneTracker(
+    bins::NTuple{N,Int};
+    allows_prefetch = true,
+    allows_unlinked = true,
+    allows_noescape = true,
+    allows_cleanup = true,
+) where {N}
     count = 0
     regular_objects = ntuple(_ -> LRU{Block}(), Val(N))
     evictable_objects = ntuple(_ -> LRU{Block}(), Val(N))
 
-    return OptaneTracker{N}(
-        count,
-        bins,
-        regular_objects,
-        evictable_objects,
-        true,
+    return OptaneTracker{N,allows_prefetch,allows_unlinked,allows_noescape,allows_cleanup}(
+        count, bins, regular_objects, evictable_objects, true
     )
 end
 
@@ -55,10 +101,7 @@ end
 #####
 
 function Base.push!(
-    policy::OptaneTracker,
-    block::Block,
-    pool = getpool(block);
-    len = length(block),
+    policy::OptaneTracker, block::Block, pool = getpool(block); len = length(block)
 )
     # Don't explicitly track remote blocks.
     pool == Remote && return block
@@ -88,8 +131,7 @@ function Base.delete!(policy::OptaneTracker, block::Block; len = length(block))
 end
 
 # TODO
-update!(policy::OptaneTracker, _) = nothing
-
+update!(::OptaneTracker, _) = nothing
 function softevict!(policy::OptaneTracker, manager, block)
     # Is this block in any of the live heaps.
     bin = findbin(policy.bins, length(block); inbounds = true)
@@ -107,12 +149,8 @@ end
 
 ### policy_new_alloc
 function policy_new_alloc(
-    policy::OptaneTracker{N},
-    manager,
-    bytes,
-    id,
-    priority::AllocationPriority,
-) where {N}
+    policy::OptaneTracker, manager, bytes, id, priority::AllocationPriority
+)
     # Can we try to allocate locally?
     if priority != ForceRemote
         @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
@@ -127,7 +165,35 @@ function policy_new_alloc(
     @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
 
     @show bytes, manager
-    error("Ran out of memory!")
+    return error("Ran out of memory!")
+end
+
+# new_allow when unlinked is untrue
+function policy_new_alloc(
+    policy::@OptaneTracker(AllowsUnlinked = false),
+    manager,
+    bytes,
+    id,
+    priority::AllocationPriority,
+)
+    # Always allocate remotely
+    remote_ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
+    if remote_ptr === nothing
+        error("Ran out of memory!")
+    end
+
+    if priority != ForceRemote
+        # Because we haven't actually registered these regions with the cache manager yet,
+        # we need to send the `setprimary = false` flag to the `prefetch!`.
+        # This will avoid trying to update the backedge pointer in the manager.
+        local_block = forceprefetch!(
+            unsafe_block(remote_ptr), policy, manager; setprimary = false
+        )
+        if local_block !== nothing
+            return datapointer(local_block)
+        end
+    end
+    return remote_ptr
 end
 
 function defrag!(manager, policy::OptaneTracker)
@@ -149,7 +215,52 @@ function defrag!(manager, policy::OptaneTracker)
     end
 end
 
-function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = false)
+#####
+##### prefetch!
+#####
+
+# We split `prefetch!` into two levels:
+# * `forceprefetch!`: Force prefetch to happen, whether or not the policy technically
+#    allows it.
+#
+# * `prefetch!`: Upper level dispatch for prefetching.
+#   This is the level where `OptaneTrackers` with disabled prefetching are allowed to
+#   intercept the function calls.
+
+function prefetch!(block::Block, policy::OptaneTracker, manager; kw...)
+    return forceprefetch!(block, policy, manager; kw...)
+end
+
+function prefetch!(
+    block::Block, policy::@OptaneTracker(AllowsPrefetch = false), manager; kw...
+)
+    return nothing
+end
+
+"""
+    forceprefetch!(block::Block, policy::OptaneTracker, manager; [readonly], [setprimary])
+
+If `block` is not in `Local` memory, create a new block in `Local` memory linked with
+`block` and copy the contents into this new block.
+
+N.B.: This function may trigger eviction of local memory if there is not enough room to
+satisfy the requested prefetch.
+
+Keyword Arguments
+-----------------
+* `readonly`: Hint that this prefetch will be a readonly prefetch.
+    The locally-created `Block` will not be marked as dirty and hence will not be writteen
+    back to the remote host if evicted (unless it is marked as dirty at some point in
+    the future). Default: `false`
+
+* `setprimary`: By default, this function will update the cache manager's view of the
+  world to reflect the new primary block to the host `Object`. If `forceprefetch!` is
+  called *before* the host `Object` is created, than, than `setprimary = false`
+  should be passed. Default: `true`
+"""
+function forceprefetch!(
+    block::Block, policy::OptaneTracker, manager; readonly = false, setprimary = true
+)
     policy.movement_enabled || return nothing
     block.size > sizeof(getheap(manager, LocalPool())) && return nothing
 
@@ -163,10 +274,16 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
         _eviction!(policy, manager, bytes)
     end
 
+    # Side-effect check
+    # If the block was freed by the GC while we were performing eviction, than it
+    # will be marked as `isqueued`.
+    #
+    # If that is the case, then `prefetch!` should abort.
+    # However, if we called `prefetch!` on something, than it *should* be rooted,
+    # so this should never happen ...
     if isqueued(block)
         return nothing
     end
-    #safeprint("Prefetching block $(getid(block)) with size $(block.size)"; force = true)
 
     # Allocate and move.
     # Don't free the old block since we're functioning as a cache.
@@ -174,20 +291,22 @@ function prefetch!(block::Block, policy::OptaneTracker, manager; readonly = fals
     ptr === nothing && return nothing
     newblock = unsafe_block(ptr)
     copyto!(newblock, block, manager)
-    result = unsafe_setprimary!(manager, block, newblock)
+
+    # `unsafe_setprimary!` can fail due to GC related reasons.
+    # If that happens, it will return `Nothing` and we should abort the current operation.
+    result = setprimary ? unsafe_setprimary!(manager, block, newblock) : block
     if result === nothing
         unsafe_free_direct(manager, newblock)
     else
         # Need to update the local policy tracking to know that this is now local.
-        push!(policy, newblock, Local)
+        setprimary && push!(policy, newblock, Local)
         link!(newblock, block)
 
         # If this is not a read-only prefetch, then we need to be conservative and mark the
         # prefetched block as dirty.
         setdirty!(newblock, !readonly)
     end
-
-    return nothing
+    return newblock
 end
 
 function evict!(A, policy::OptaneTracker, manager)
@@ -290,7 +409,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     localheap = getheap(manager, LocalPool())
 
     # Check this bin and all higher bins.
-    for i in bin:N
+    for i = bin:N
         lru = policy.evictable_objects[i]
         if !isempty(lru)
             block = first(lru)
@@ -301,7 +420,7 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     end
 
     # Try evicting not from the easily evictable trackers.
-    for i in bin:N
+    for i = bin:N
         lru = policy.regular_objects[i]
         if !isempty(lru)
             block = first(lru)
@@ -313,3 +432,24 @@ function _eviction!(policy::OptaneTracker{N}, manager, bytes) where {N}
     return nothing
 end
 
+#####
+##### API Disabling Extensions
+#####
+
+# Disable `@noescape` for certain policies.
+function noescape(
+    ::CacheManager{<:@OptaneTracker(AllowsNoescape = false)},
+    ::Val,
+    f::F,
+    args::Vararg{Any,N};
+    kw...,
+) where {F,N}
+    return f(args...; kw...)
+end
+
+# Disable `cleanup!` and `preserve!` for certain policies.
+function unsafe_free(
+    ::Object{<:CacheManager{<:@OptaneTracker(AllowsCleanup = false)}}, ::CleanupContext
+)
+    return nothing
+end

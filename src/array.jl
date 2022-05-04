@@ -21,7 +21,7 @@ const Writable = ReadWrite
 ###### CachedArray
 ######
 
-struct CachedArray{T,N,S<:AbstractStatus,M} <: DenseArray{T,N}
+struct CachedArray{T,N,S<:AbstractStatus,M} <: AbstractCachedArray{T,N}
     object::Object{M}
     dims::NTuple{N,Int}
 

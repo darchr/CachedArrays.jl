@@ -2,8 +2,7 @@
 ##### Default Definitions
 #####
 
-const CachedTypes = Union{Object,CachedArray}
-
+const CachedTypes = Union{Object,AbstractCachedArray}
 function setdirty!(x::CachedTypes, flag = true)
     meta = metadata(x)
     setdirty!(manager(x), meta, flag)
@@ -19,13 +18,15 @@ pool(x::CachedTypes) = getpool(metadata(x))
 function prefetch!(x::CachedTypes; kw...)
     _manager = manager(x)
     @spinlock alloc_lock(_manager) begin
-        block = metadata(x)
-        # Possibility that `maybe_cleanup!` cleans up this block.
-        # Presumeably, this can't happen since we have `x` and `x` is holding onto the
-        # object that owns this block ... so it should never have been garbage collected
-        # in the first place.
-        if maybe_cleanup!(_manager, getid(block)) == false
-            prefetch!(block, getpolicy(_manager), _manager; kw...)
+        @time_ns _manager.manager_time begin
+            block = metadata(x)
+            # Possibility that `maybe_cleanup!` cleans up this block.
+            # Presumeably, this can't happen since we have `x` and `x` is holding onto the
+            # object that owns this block ... so it should never have been garbage collected
+            # in the first place.
+            if maybe_cleanup!(_manager, getid(block)) == false
+                prefetch!(block, getpolicy(_manager), _manager; kw...)
+            end
         end
     end
 end
@@ -33,15 +34,21 @@ end
 function evict!(x::CachedTypes; kw...)
     _manager = manager(x)
     @spinlock alloc_lock(_manager) begin
-        maybe_cleanup!(_manager)
-        evict!(x, getpolicy(_manager), _manager)
+        @time_ns _manager.manager_time begin
+            maybe_cleanup!(_manager)
+            evict!(x, getpolicy(_manager), _manager)
+        end
     end
     return nothing
 end
 
 function softevict!(x::CachedTypes)
     _manager = manager(x)
-    @spinlock alloc_lock(_manager) softevict!(getpolicy(_manager), _manager, metadata(x))
+    @spinlock alloc_lock(_manager) begin
+        @time_ns _manager.manager_time begin
+            softevict!(getpolicy(_manager), _manager, metadata(x))
+        end
+    end
 end
 
 #####
@@ -54,7 +61,7 @@ function onobjects(f::F, x::Array{T}) where {F,T}
 end
 
 onobjects(f::F, x::Object) where {F} = isnull(unsafe_pointer(x)) || f(x)
-onobjects(f::F, x::CachedArray) where {F} = onobjects(f, x.object)
+onobjects(f::F, x::AbstractCachedArray) where {F} = onobjects(f, x.object)
 onobjects(f::F, x::Union{NamedTuple,Tuple}) where {F} = foreach(x -> onobjects(f, x), x)
 
 """
@@ -316,5 +323,22 @@ macro noescape(manager, args...)
     end
     # Process keywords
     return noescape_impl(manager, kw, fn)
+end
+
+#####
+##### `cleanup!` and `preserve`.
+#####
+
+function preserve(f::F) where {F}
+    s = Set{UInt}()
+    onobjects(o -> push!(s, getid(o)), f)
+    return s
+end
+
+struct CleanupContext <: AbstractFreeContext end
+function cleanup!(f::F, preserve = ()) where {F}
+    onobjects(f) do o
+        in(id(o), preserve) || unsafe_free(o, CleanupContext())
+    end
 end
 

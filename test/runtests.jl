@@ -36,3 +36,4 @@ include("annotation.jl")
 
 include("integration/corner.jl")
 include("integration/stress.jl")
+include("policy.jl")

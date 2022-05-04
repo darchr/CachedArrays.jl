@@ -22,7 +22,9 @@ end
 BackedgeMap() = BackedgeMap(Dict{UInt,Backedge}(), 0)
 
 Base.getindex(map::BackedgeMap, id) = map.dict[id]
-Base.setindex!(map::BackedgeMap, bb::Tuple{Block,Backedge}, id) = setindex!(map.dict, bb, id)
+function Base.setindex!(map::BackedgeMap, bb::Tuple{Block,Backedge}, id)
+    return setindex!(map.dict, bb, id)
+end
 function set!(map::BackedgeMap, block::Block, backedge::Backedge)
     id = getid(block)
     sz = length(block)
@@ -70,6 +72,16 @@ mutable struct CacheManager{C,T}
     alloc_lock::Base.Threads.SpinLock
     freebuffer::FreeBuffer{Block}
     telemetry::T
+
+    # Telemetry
+    manager_time::Int
+    movement_time::Int
+end
+
+function reset_time!(manager::CacheManager)
+    manager.manager_time = 0
+    manager.movement_time = 0
+    return nothing
 end
 
 # Telemetry Utils
@@ -129,6 +141,8 @@ function CacheManager(
         Threads.SpinLock(),
         FreeBuffer{Block}(),
         telemetry,
+        0,
+        0,
     )
 
     # Add this to the global manager list to ensure that it outlives any of its users.
@@ -154,9 +168,12 @@ function Base.show(io::IO, M::CacheManager)
     println(io, "    Local Heap utilization: $allocated of $total ($(allocated / total) %)")
     allocated, total = getstate(M.remote_heap) ./ 1E9
     println(
-        io,
-        "    Remote Heap utilization: $allocated of $total ($(allocated / total) %)",
+        io, "    Remote Heap utilization: $allocated of $total ($(allocated / total) %)"
     )
+    (; movement_time, manager_time) = M
+    println(io, "    Manager Time (s): ", (manager_time - movement_time) / 1E9)
+    println(io, "    Movement Time (s): ", movement_time / 1E9)
+    return nothing
 end
 
 #####
@@ -212,9 +229,15 @@ Allocate an object from `manager` in `pool`.
 """
 function direct_alloc(pool::PoolType, manager::CacheManager, bytes, id::UInt)
     @spinlock alloc_lock(manager) begin
-        ptr = iszero(bytes) ? Ptr{Nothing}() : unsafe_alloc_direct(pool, manager, bytes, id)
-        ptr === nothing && throw(AllocationException())
-        return Object(ptr, manager)
+        return @time_ns manager.manager_time begin
+            ptr = if iszero(bytes)
+                Ptr{Nothing}()
+            else
+                unsafe_alloc_direct(pool, manager, bytes, id)
+            end
+            ptr === nothing && throw(AllocationException())
+            Object(ptr, manager)
+        end
     end
 end
 
@@ -277,10 +300,7 @@ end
 defrag!(manager::CacheManager) = defrag!(manager, manager.policy)
 
 function unsafe_alloc_through_policy(
-    manager::CacheManager,
-    bytes,
-    priority::AllocationPriority,
-    id = getid(manager),
+    manager::CacheManager, bytes, priority::AllocationPriority, id = getid(manager)
 )
     # Only attempt draining at the beginning of an allocation round.
     #safeprint("Allocating $(bytes) for id $(id)"; force = true)
@@ -298,11 +318,15 @@ function alloc(
     id::UInt = getid(manager),
 )
     @spinlock alloc_lock(manager) begin
-        # TODO: What to do about zero sized allocations ...
-        ptr =
-            iszero(bytes) ? Ptr{Nothing}() :
-            unsafe_alloc_through_policy(manager, bytes, priority, id)
-        return Object(ptr, manager)
+        return @time_ns manager.manager_time begin
+            # TODO: What to do about zero sized allocations ...
+            ptr = if iszero(bytes)
+                Ptr{Nothing}()
+            else
+                unsafe_alloc_through_policy(manager, bytes, priority, id)
+            end
+            Object(ptr, manager)
+        end
     end
 end
 
@@ -318,13 +342,16 @@ end
 # a null pointer, in which case we definitely don't want to add this to the
 # free buffer.
 function free(manager::CacheManager, block::Block)
-    push!(manager.freebuffer, block)
+    return push!(manager.freebuffer, block)
 end
 function free(manager::CacheManager, ptr::Ptr)
-    isnull(ptr) || free(manager, unsafe_block(ptr))
+    return isnull(ptr) || free(manager, unsafe_block(ptr))
 end
 
-function unsafe_free(object::Object)
+abstract type AbstractFreeContext end
+struct NoContext <: AbstractFreeContext end
+
+function unsafe_free(object::Object, ::AbstractFreeContext = NoContext())
     ptrptr = Ptr{Ptr{Nothing}}(blockpointer(object))
     old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
     if !isnull(old)
@@ -335,7 +362,11 @@ function unsafe_free(object::Object)
     end
 end
 
-function unsafe_free(manager::CacheManager, (block, ptrptr)::Tuple{Block,Backedge})
+function unsafe_free(
+    manager::CacheManager,
+    (block, ptrptr)::Tuple{Block,Backedge},
+    ::AbstractFreeContext = NoContext(),
+)
     isqueued(block) && return nothing
     old = atomic_ptr_xchg!(ptrptr, Ptr{Nothing}())
     if !isnull(old)
@@ -357,10 +388,7 @@ This operation may fail if `current` has been garbage collected.
 If this is the case, this function will return `nothing`.
 """
 function unsafe_setprimary!(
-    manager::CacheManager,
-    current::Block,
-    next::Block;
-    unsafe = false,
+    manager::CacheManager, current::Block, next::Block; unsafe = false
 )
     # Need to check if the current is queued for cleanup.
     # If so, this means that the backedge is invalid.
@@ -402,17 +430,19 @@ getprimary(manager::CacheManager, id::UInt) = first(getmap(manager, id))
 ##### Copyto!
 #####
 
-function Base.copyto!(dst::Block, src::Block, ::CacheManager; include_header = false)
-    if src.size <= 4096
-        nthreads = 1
-    else
-        nthreads = getpool(dst) == Remote ? 8 : Threads.nthreads()
-    end
+function Base.copyto!(dst::Block, src::Block, manager::CacheManager; include_header = false)
+    @time_ns manager.movement_time begin
+        if src.size <= 4096
+            nthreads = 1
+        else
+            nthreads = getpool(dst) == Remote ? 8 : Threads.nthreads()
+        end
 
-    if include_header
-        _memcpy!(pointer(dst), pointer(src), length(src); nthreads)
-    else
-        _memcpy!(datapointer(dst), datapointer(src), length(src); nthreads)
+        if include_header
+            _memcpy!(pointer(dst), pointer(src), length(src); nthreads)
+        else
+            _memcpy!(datapointer(dst), datapointer(src), length(src); nthreads)
+        end
     end
     return nothing
 end

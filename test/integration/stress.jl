@@ -109,4 +109,8 @@ end
 
     @show manager
     @show CachedArrays.gettimer()
+    (; manager_time, movement_time) = manager
+    @show manager_time, movement_time
+    id = CachedArrays.readid(manager)
+    @show id, (manager_time - movement_time) / id
 end

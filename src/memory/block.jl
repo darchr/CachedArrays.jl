@@ -73,9 +73,6 @@ Base.:(==)(a::Block, b::Block) = (pointer(a) == pointer(b))
 
 unsafe_block(ptr::Ptr) = Block(convert(Ptr{Nothing}, ptr) - headersize())
 
-struct BlockMeta end
-metadata(x, ::BlockMeta) = unsafe_block(unsafe_pointer(x))
-
 # Reserved room in for each allocation (bytes).
 headersize() = 64
 

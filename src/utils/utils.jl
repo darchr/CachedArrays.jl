@@ -159,38 +159,38 @@ findT(::Type{T}, ::Tuple{}) where {T} = nothing
 findT(::Type{T}, x::U, rest) where {T,U<:T} = x
 findT(::Type{T}, ::Any, rest) where {T} = findT(T, rest)
 
-#####
-##### ObjectCache
-#####
-
-mutable struct ObjectCache{T,Args}
-    cache::Vector{T}
-    head::Int
-    args::Args
-end
-
-ObjectCache{T}() where {T} = ObjectCache{T,Tuple{}}(Vector{T}(), 0, ())
-
-function Base.getindex(cache::ObjectCache{T}) where {T}
-    head = cache.head
-    if head > 0
-        object = @inbounds(cache.cache[head])
-        cache.head = head - 1
-        return object
-    end
-    return T(cache.args...)
-end
-
-function return!(cache::ObjectCache{T}, x::T) where {T}
-    head = cache.head
-    if head < length(cache.cache)
-        head += 1
-        cache.cache[head] = x
-    else
-        push!(cache.cache, x)
-    end
-    return nothing
-end
+# #####
+# ##### ObjectCache
+# #####
+#
+# mutable struct ObjectCache{T,Args}
+#     cache::Vector{T}
+#     head::Int
+#     args::Args
+# end
+#
+# ObjectCache{T}() where {T} = ObjectCache{T,Tuple{}}(Vector{T}(), 0, ())
+#
+# function Base.getindex(cache::ObjectCache{T}) where {T}
+#     head = cache.head
+#     if head > 0
+#         object = @inbounds(cache.cache[head])
+#         cache.head = head - 1
+#         return object
+#     end
+#     return T(cache.args...)
+# end
+#
+# function return!(cache::ObjectCache{T}, x::T) where {T}
+#     head = cache.head
+#     if head < length(cache.cache)
+#         head += 1
+#         cache.cache[head] = x
+#     else
+#         push!(cache.cache, x)
+#     end
+#     return nothing
+# end
 
 #####
 ##### Exceptions

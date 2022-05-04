@@ -54,3 +54,23 @@ else
     gettimer() = nothing
 end
 
+#####
+##### MANAGERTIMING
+#####
+
+@static if MANAGERTIMING
+    macro time_ns(footer, ex)
+        return quote
+            start = time_ns()
+            result = $(esc(ex))
+            stop = time_ns()
+            $(esc(footer)) += (stop - start)
+            result
+        end
+    end
+else
+    macro time_ns(footer, ex)
+        return :($(esc(ex)))
+    end
+end
+

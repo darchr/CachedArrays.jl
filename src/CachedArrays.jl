@@ -44,7 +44,8 @@ using DocStringExtensions
 
 const DEBUG = true              # Enable asserts
 const VERBOSE = false           # Diagnostic printing
-const ENABLETIMING = true       # Debug timing
+const ENABLETIMING = false       # Debug timing
+const MANAGERTIMING = true
 # const ALLOW_UNSAFE_FREE = true  # Enable the `unsafe_free` function.
 include("options.jl")
 
@@ -53,6 +54,7 @@ include("options.jl")
 #####
 
 @enum AllocationPriority ForceLocal PreferLocal ForceRemote
+abstract type AbstractCachedArray{T,N} <: DenseArray{T,N} end
 
 # Bootstrap Utilities
 include("utils/utils.jl")
@@ -65,13 +67,14 @@ include("allocators.jl")
 # Heap implementations
 include("memory/memory.jl")
 
-# Cache eviction policies
-include("policy.jl")
-include("policies/local.jl")
-
 # Implementation of the arrays and cache manager
 include("manager.jl")
 include("validation.jl")
+include("api.jl")
+
+# Cache eviction policies
+include("policy.jl")
+include("policies/local.jl")
 
 # Array Implementstions
 include("llvm.jl")
@@ -79,11 +82,8 @@ using .LoadStore: LoadStore
 
 include("array.jl")
 include("telemetry.jl")
-
-# Fast "memcpy"
 include("memcpy.jl")
 include("lib.jl")
-include("api.jl")
 
 #####
 ##### Keep track of Managers
