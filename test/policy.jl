@@ -47,6 +47,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,)),
         )
+        @test CachedArrays.__allows_prefetch(manager_prefetch.policy) == true
 
         manager_noprefetch = CachedArrays.CacheManager(
             CachedArrays.AlignedAllocator(),
@@ -56,6 +57,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,); allows_prefetch = false),
         )
+        @test CachedArrays.__allows_prefetch(manager_noprefetch.policy) == false
 
         x_prefetch = CachedArrays.CachedArray{Float32}(
             undef, manager_prefetch, 10000; priority = CachedArrays.ForceRemote
@@ -99,6 +101,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,)),
         )
+        @test CachedArrays.__allows_unlinked(manager_unlinked.policy) == true
 
         manager_linked = CachedArrays.CacheManager(
             CachedArrays.AlignedAllocator(),
@@ -108,6 +111,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,); allows_unlinked = false),
         )
+        @test CachedArrays.__allows_unlinked(manager_linked.policy) == false
 
         x_unlinked = CachedArrays.CachedArray{Float32}(
             undef, manager_unlinked, 10000; priority = CachedArrays.ForceLocal
@@ -155,6 +159,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,)),
         )
+        @test CachedArrays.__allows_noescape(manager_with_noescape.policy) == true
 
         manager_without_noescape = CachedArrays.CacheManager(
             CachedArrays.AlignedAllocator(),
@@ -164,6 +169,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,); allows_noescape = false),
         )
+        @test CachedArrays.__allows_noescape(manager_without_noescape.policy) == false
 
         function allocates_many_intermediates(x)
             for _ = 1:100
@@ -206,6 +212,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,)),
         )
+        @test CachedArrays.__allows_cleanup(manager_with_cleanup.policy) == true
 
         manager_without_cleanup = CachedArrays.CacheManager(
             CachedArrays.AlignedAllocator(),
@@ -215,6 +222,7 @@
             minallocation = 10,
             policy = CachedArrays.OptaneTracker((2^10,); allows_cleanup = false),
         )
+        @test CachedArrays.__allows_cleanup(manager_without_cleanup.policy) == false
 
         x_with_cleanup = CachedArrays.CachedArray{Float32}(
             undef, manager_with_cleanup, 10000; priority = CachedArrays.ForceLocal, status = CachedArrays.ReadWrite(),

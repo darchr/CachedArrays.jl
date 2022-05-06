@@ -23,6 +23,9 @@
     PrimaryInLocal
     PrimaryInRemote
 
+    # Usage
+    MarkUsed
+
     # Cleanup
     UnsafeFreed
     GarbageCollected
@@ -45,16 +48,16 @@ const BacktraceType = Vector{Union{Ptr{Nothing},Base.InterpreterIP}}
 
 struct Telemetry
     # Map allocated IDs to their sequence of actions.
-    logs::Dict{UInt, Vector{TelemetryRecord}}
-    objects::Dict{UInt, AllocationRecord}
+    logs::Dict{UInt,Vector{TelemetryRecord}}
+    objects::Dict{UInt,AllocationRecord}
     backtraces::Dict{BacktraceType,Int}
     lock::Base.Threads.SpinLock
 end
 
 function Telemetry()
     return Telemetry(
-        Dict{UInt, Vector{TelemetryRecord}}(),
-        Dict{UInt, AllocationRecord}(),
+        Dict{UInt,Vector{TelemetryRecord}}(),
+        Dict{UInt,AllocationRecord}(),
         Dict{BacktraceType,Int}(),
         Base.Threads.SpinLock(),
     )
@@ -82,11 +85,15 @@ function Base.stacktrace(telemetry::Telemetry, record::TelemetryRecord)
 end
 
 function Base.stacktrace(telemetry::Telemetry, key::Integer)
-    bt = get(telemetry.backtraces, key, nothing)
-    if bt !== nothing
-        return stacktrace(bt)
+    for (k, v) in telemetry.backtraces
+        v == key && return stacktrace(k)
     end
     return nothing
+    # bt = get(telemetry.backtraces, key, nothing)
+    # if bt !== nothing
+    #     return stacktrace(bt)
+    # end
+    # return nothing
 end
 
 #####
@@ -168,6 +175,17 @@ function telemetry_primary(telemetry::Telemetry, id, location)
     return nothing
 end
 
+telemetry_used(::NoTelemetry, args...) = nothing
+function telemetry_used(telemetry::Telemetry, id)
+    now = time_ns()
+    @spinlock telemetry.lock begin
+        key = getkey(telemetry)
+        log = telemetry.logs[id]
+        push!(log, TelemetryRecord(now, key, MarkUsed))
+    end
+    return nothing
+end
+
 #####
 ##### Analysis Passes
 #####
@@ -208,22 +226,19 @@ function estimate_lifetime(library::Vector{TelemetryRecord})
     if length(library) == 2
         return last(library).accesstime - first(library).accesstime
     else
-        return library[end-1].accesstime - first(library).accesstime
+        return library[end - 1].accesstime - first(library).accesstime
     end
 end
 
 function create_timeline(actions::Dict{K,<:Any}, objects) where {K}
-    timeline = Vector{NamedTuple{(:accesstime, :id, :size, :action),Tuple{Int,Int,Int,Symbol}}}()
+    timeline = Vector{
+        NamedTuple{(:accesstime, :id, :size, :action),Tuple{Int,Int,Int,Symbol}}
+    }()
     for (id_str, logs) in actions
         sz = objects[id_str].size
         id = id_str
         for log in logs
-            nt = (
-                accesstime = log.accesstime,
-                id = id,
-                size = sz,
-                action = log.action
-            )
+            nt = (accesstime = log.accesstime, id = id, size = sz, action = log.action)
             push!(timeline, nt)
         end
     end
@@ -249,16 +264,56 @@ function heap_usage(timeline::AbstractVector{<:NamedTuple}; name = "Fast")
     return usage
 end
 
+function isorphaned(records::AbstractVector{TelemetryRecord})
+    # For now, this analysis pass is only valid if objects were initially allocated
+    # in fast memory
+    @assert records[begin].action == AllocFast
+    # An object is orphaned if it moved to slow memory and never used again.
+    #@assert count(x -> x.action == PrimaryInRemote, records) <= 1
+    i = findfirst(x -> x.action == PrimaryInRemote, records)
+    # If the object was never moved to remote, than by definition it was never orphaned.
+    i === nothing && return false
+
+    # Now that we have a starting point, if an object is never used it will have been
+    # orphaned.
+    for index in (i+1):lastindex(records)
+        record = records[index]
+        record.action == PrimaryInLocal && return false
+    end
+    return true
+end
+
+function find_orphaned(telemetry::Telemetry)
+    (; logs) = telemetry
+    stacktraces = Any[]
+    for (object_id, record) in logs
+        if isorphaned(record)
+            allocation = telemetry.objects[object_id]
+            key = record[begin].backtrace_key
+            @show allocation, key
+            push!(stacktraces, stacktrace(telemetry, key))
+        end
+    end
+    return stacktraces
+end
+
+function moved_to(telemetry::Telemetry, key = PrimaryInRemote)
+    (; logs, objects) = telemetry
+    accum = 0
+    for (object_id, record) in logs
+        if any(x -> x.action == key, record)
+            accum += objects[object_id].size
+        end
+    end
+    return accum
+end
+
 #####
 ##### Save Telemetry
 #####
 
 const GLOBAL_FILES = [
-    "./boot.jl",
-    "./client.jl",
-    "./essentials.jl",
-    "REPL/src/REPL.jl",
-    "REPL[",
+    "./boot.jl", "./client.jl", "./essentials.jl", "REPL/src/REPL.jl", "REPL["
 ]
 
 function prettify(stack::Vector{Base.StackTraces.StackFrame})
@@ -279,7 +334,6 @@ function prettify(stack::Vector{Base.StackTraces.StackFrame})
     return stack
 end
 
-
 # Custom JSON serialization for Telemetry
 struct TelemetrySerialization <: JSON.CommonSerialization end
 struct NoBacktraces{T}
@@ -288,22 +342,17 @@ end
 
 function JSON.lower(x::Telemetry)
     # Reorder backtraces
-    reverse_backtrace = Dict(v => k for (k,v) in x.backtraces)
-    backtraces = [get(reverse_backtrace, i, "null") for i in Base.OneTo(length(reverse_backtrace))]
+    reverse_backtrace = Dict(v => k for (k, v) in x.backtraces)
+    backtraces = [
+        get(reverse_backtrace, i, "null") for i in Base.OneTo(length(reverse_backtrace))
+    ]
 
-    return Dict(
-        :logs => x.logs,
-        :objects => x.objects,
-        :backtraces => backtraces,
-    )
+    return Dict(:logs => x.logs, :objects => x.objects, :backtraces => backtraces)
 end
 
 function JSON.lower(x::NoBacktraces)
     telemetry = x.telemetry
-    return Dict(
-        :logs => telemetry.logs,
-        :objects => telemetry.objects,
-    )
+    return Dict(:logs => telemetry.logs, :objects => telemetry.objects)
 end
 
 const SC = JSON.StructuralContext
@@ -324,12 +373,7 @@ function JSON.show_json(io::SC, ::TelemetrySerialization, x::Base.StackTraces.St
         return JSON.show_json(io, JSON.StandardSerialization(), "omitted")
     end
 
-    dict = Dict(
-        :func => x.func,
-        :file => x.file,
-        :line => x.line,
-        :linfo => x.linfo
-    )
+    dict = Dict(:func => x.func, :file => x.file, :line => x.line, :linfo => x.linfo)
     return JSON.show_json(io, TelemetrySerialization(), dict)
 end
 
@@ -354,14 +398,16 @@ tostring(::Type{<:CacheManager}) = "CacheManager"
 
 # Top level save functions
 function JSON.show_json(io::SC, ::TelemetrySerialization, x::Core.MethodInstance)
-    return JSON.show_json(io, JSON.StandardSerialization(), tostring.(x.specTypes.parameters))
+    return JSON.show_json(
+        io, JSON.StandardSerialization(), tostring.(x.specTypes.parameters)
+    )
 end
 
-function save_trace(file::AbstractString, x::Union{Telemetry, NoBacktraces})
-    open(io -> save_trace(io, x), file; write = true)
+function save_trace(file::AbstractString, x::Union{Telemetry,NoBacktraces})
+    return open(io -> save_trace(io, x), file; write = true)
 end
 
-function save_trace(io::IO, x::Union{Telemetry, NoBacktraces})
+function save_trace(io::IO, x::Union{Telemetry,NoBacktraces})
     return JSON.show_json(io, TelemetrySerialization(), x; indent = 4)
 end
 

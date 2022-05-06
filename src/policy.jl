@@ -40,7 +40,7 @@ macro OptaneTracker(args...)
 
     # Unpack keyword arguments
     kw = default_optane_kw()
-    kw_type_map = Dict(k => Bool for k in keys(kw))
+    kw_type_map = Dict(k => Union{Bool,Symbol} for k in keys(kw))
     for i in eachindex(args)
         arg = args[i]
         if arg.head != :(=)
@@ -59,11 +59,16 @@ macro OptaneTracker(args...)
             """
             error(msg)
         end
-        kw[name] = value
+        kw[name] = esc(value)
     end
     kv = collect(values(kw))
     return :(OptaneTracker{$N,$(kv...)})
 end
+
+__allows_prefetch(::@OptaneTracker(AllowsPrefetch = T)) where {T} = T
+__allows_unlinked(::@OptaneTracker(AllowsUnlinked = T)) where {T} = T
+__allows_noescape(::@OptaneTracker(AllowsNoescape = T)) where {T} = T
+__allows_cleanup(::@OptaneTracker(AllowsCleanup = T)) where {T} = T
 
 function OptaneTracker(
     bins::NTuple{N,Int};
@@ -151,6 +156,13 @@ end
 function policy_new_alloc(
     policy::OptaneTracker, manager, bytes, id, priority::AllocationPriority
 )
+    # Trigger full GC and try to get pending finalizers to run.
+    allocated, total = getstate(getheap(manager, RemotePool()))
+    if allocated / total >= 0.90
+        println("Preemptively Invoking Garbage Collector!")
+        GC.gc(true)
+    end
+
     # Can we try to allocate locally?
     if priority != ForceRemote
         @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
@@ -176,6 +188,13 @@ function policy_new_alloc(
     id,
     priority::AllocationPriority,
 )
+    # Trigger full GC and try to get pending finalizers to run.
+    allocated, total = getstate(getheap(manager, RemotePool()))
+    if allocated / total >= 0.90
+        println("Preemptively Invoking Garbage Collector!")
+        GC.gc(true)
+    end
+
     # Always allocate remotely
     remote_ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
     if remote_ptr === nothing
@@ -187,7 +206,7 @@ function policy_new_alloc(
         # we need to send the `setprimary = false` flag to the `prefetch!`.
         # This will avoid trying to update the backedge pointer in the manager.
         local_block = forceprefetch!(
-            unsafe_block(remote_ptr), policy, manager; setprimary = false
+            unsafe_block(remote_ptr), policy, manager; setprimary = false, readonly = false
         )
         if local_block !== nothing
             return datapointer(local_block)
@@ -321,14 +340,7 @@ end
 ##### Implementation
 #####
 
-# TODO: Time since last GC?
 function _try_alloc_local(policy::OptaneTracker, manager, bytes, id, priority)
-    # allocated, total = getstate(getheap(manager, LocalPool()))
-    # if allocated / total >= 0.90
-    #     # Trigger full GC and try to get pending finalizers to run.
-    #     GC.gc(false)
-    # end
-
     # If allocation is successful, good!
     @return_if_exists ptr = unsafe_alloc_direct(LocalPool(), manager, bytes, id)
 
