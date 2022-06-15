@@ -119,7 +119,7 @@ end
 function Base.delete!(policy::OptaneTracker, block::Block; len = length(block))
     getpool(block) == Remote && return true
 
-    # TODO: Metadata in block so we don't have to do two searches.
+    # Search through standard and evictible bins.
     bin = findbin(policy.bins, len; inbounds = true)
     lru = policy.regular_objects[bin]
     if in(block, lru)
@@ -158,7 +158,7 @@ function policy_new_alloc(
 )
     # Trigger full GC and try to get pending finalizers to run.
     allocated, total = getstate(getheap(manager, RemotePool()))
-    if allocated / total >= 0.90
+    if allocated / total >= 0.80
         println("Preemptively Invoking Garbage Collector!")
         GC.gc(true)
     end
@@ -168,16 +168,8 @@ function policy_new_alloc(
         @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
     end
     @return_if_exists ptr = unsafe_alloc_direct(RemotePool(), manager, bytes, id)
-
-    # Failed so far - try again if we have enough memory locally to defrag.
-    allocated, total = getstate(getheap(manager, LocalPool()))
-    if (total - allocated) > bytes
-        defrag!(manager, policy)
-    end
-    @return_if_exists ptr = _try_alloc_local(policy, manager, bytes, id, priority)
-
-    @show bytes, manager
-    return error("Ran out of memory!")
+    error("Ran out of memory!")
+    return nothing
 end
 
 # new_allow when unlinked is untrue
@@ -190,7 +182,7 @@ function policy_new_alloc(
 )
     # Trigger full GC and try to get pending finalizers to run.
     allocated, total = getstate(getheap(manager, RemotePool()))
-    if allocated / total >= 0.90
+    if allocated / total >= 0.80
         println("Preemptively Invoking Garbage Collector!")
         GC.gc(true)
     end

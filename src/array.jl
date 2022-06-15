@@ -295,18 +295,16 @@ for (typ, fn) in __fnmap
     ) where {T,N,S,M}
         return $fn(x)
     end
-
-    # ChainRules
 end
 
 # ChainRules
-function ChainRulesCore.rrule(::typeof(readable), x::CachedArray)
+function ChainRulesCore.rrule(::typeof(readable), x::AbstractArray)
     return (readable(x), dy -> (ChainRulesCore.NoTangent(), dy))
 end
-function ChainRulesCore.rrule(::typeof(writable), x::CachedArray)
+function ChainRulesCore.rrule(::typeof(writable), x::AbstractArray)
     return (writable(x), dy -> (ChainRulesCore.NoTangent(), dy))
 end
-function ChainRulesCore.rrule(::typeof(release), x::CachedArray)
+function ChainRulesCore.rrule(::typeof(release), x::AbstractArray)
     return (release(x), dy -> (ChainRulesCore.NoTangent(), dy))
 end
 

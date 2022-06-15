@@ -18,7 +18,7 @@ const KEYWORDS = vcat(
 )
 
 for keyword in KEYWORDS
-    @eval $keyword(x::AbstractArray; kw...) = nothing
+    @eval $keyword(x::AbstractArray; kw...) = x
     @eval function $keyword(x, y, z...; kw...)
         $keyword(x; kw...)
         $keyword(y, z...; kw...)

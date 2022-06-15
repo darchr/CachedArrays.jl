@@ -75,6 +75,7 @@ include("api.jl")
 # Cache eviction policies
 include("policy.jl")
 include("policies/local.jl")
+include("policies/firsttouch.jl")
 
 # Array Implementstions
 include("llvm.jl")
