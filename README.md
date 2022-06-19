@@ -213,21 +213,17 @@ julia> display(manager);
 Memory comes from subtypes of `CachedArrays.AbstractAllocator`.
 Valid sub-types must implement the following functions:
 
-"""
+```julia
 allocate(allocator, bytes::Integer) -> (Ptr{Nothing}, Token)
-"""
-Allocate `bytes` from `allocator`. Return type is a a tuple whose first element is a
-pointer with type `Ptr{Nothing}` to the beginning of the allocated data and whose second
-
-element is some token that can be passed to `free`.
-"""
+```
+Allocate `bytes` from `allocator`. Return type is a a tuple whose first element is a pointer with type `Ptr{Nothing}` to the beginning of the allocated data and whose second element is some token that can be passed to `free`.
+```julia
 free(ptr::Ptr{Nothing}, token)
-"""
-Complement to `allocate`: Takes the returned pointer and token and takes any steps
-necessary to free the data.
+```
+Complement to `allocate`: Takes the returned pointer and token and takes any steps necessary to free the data.
 In otherwords, the following should and clean up all allocated resources:
-"""
+```julia
 free(allocate(allocator, bytes)...)
-"""
+```
 **Note**: If `token` will automatically handle resource reclamation using a finalizer, then the type `CachedArrays.NoopWrapper` can be wrapped around the token to turn `free` into a no-op.
 
