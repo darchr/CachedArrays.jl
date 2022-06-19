@@ -15,6 +15,7 @@ isdirty(x::CachedTypes) = isdirty(metadata(x))
 id(x::CachedTypes) = getid(metadata(x))
 pool(x::CachedTypes) = getpool(metadata(x))
 
+prefetch!(x; kw...) = nothing
 function prefetch!(x::CachedTypes; kw...)
     _manager = manager(x)
     @spinlock alloc_lock(_manager) begin
@@ -31,6 +32,7 @@ function prefetch!(x::CachedTypes; kw...)
     end
 end
 
+evict!(x; kw...) = nothing
 function evict!(x::CachedTypes; kw...)
     _manager = manager(x)
     @spinlock alloc_lock(_manager) begin
@@ -42,6 +44,7 @@ function evict!(x::CachedTypes; kw...)
     return nothing
 end
 
+softevict!(x; kw...) = nothing
 function softevict!(x::CachedTypes)
     _manager = manager(x)
     @spinlock alloc_lock(_manager) begin
@@ -212,6 +215,7 @@ function noescape(
             # Back edge exists - free the result
             unsafe_free(manager, backedge)
         end
+        unsafe_cleanup!(manager)
     end
     return result
 end

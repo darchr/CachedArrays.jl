@@ -81,7 +81,7 @@ function CachedArray{T}(
     ::UndefInitializer,
     manager,
     dims::NTuple{N,Int};
-    status = NotBusy(),
+    status = ReadWrite(),
     priority = PreferLocal,
 ) where {T,N}
     object = alloc(manager, prod(dims) * sizeof(T), priority)
